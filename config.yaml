@@ -1,0 +1,12 @@
+profiles:
+  - name: "pm_part_time"
+    resume_id: ${PROFILE_ID1}
+    resume_title: "Менеджер проектов" # Exact text as it appears in HH UI dropdown
+    resume_file: "resumes/pm_part.txt"
+    strict_requirements: "Part-time only. Must be a Business Assistant, strictly NOT a Personal Assistant. No cold sales."
+    
+#  - name: "devops_junior"
+#    resume_id: ${PROFILE_ID2}
+#    resume_title: "DevOps Engineer"
+#    resume_file: "resumes/devops.txt"
+#    strict_requirements: "Junior or Middle level. Must involve Linux and Docker. No pure Windows admin roles."

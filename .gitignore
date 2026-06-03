@@ -1,0 +1,6 @@
+.env
+.mypy_cache
+applied.json
+resumes/
+state.json
+

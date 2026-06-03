@@ -1,0 +1,23 @@
+services:
+  hh-bot:
+    build: .
+    container_name: hh-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - HTTP_PROXY=http://gluetun:8888
+      - HTTPS_PROXY=http://gluetun:8888
+      - NO_PROXY=api.hh.ru,hh.ru
+    networks:
+      - homelab_network
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./resumes:/app/resumes:ro
+      - ./applied.json:/app/applied.json
+      - ./state.json:/app/state.json:ro # Injected session state
+
+networks:
+  homelab_network:
+    external: true
+    name: homelab_default 
