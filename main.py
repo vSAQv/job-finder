@@ -123,8 +123,14 @@ def process_profile(page, profile, applied):
 
     url = f"https://hh.ru/resume/{resume_id}/similar_vacancies"
     page.goto(url, timeout=60000, wait_until="domcontentloaded")
-    page.wait_for_load_state("domcontentloaded")
     check_for_captcha(page)
+
+    try:
+        page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=15000)
+    except PlaywrightTimeout:
+        print(f"[ERROR] Элементы вакансий не появились в DOM. Сохраняю debug.png")
+        page.screenshot(path="debug.png")
+        return
 
     for _ in range(random.randint(2, 4)):
         page.mouse.wheel(0, random.randint(1000, 2500))
