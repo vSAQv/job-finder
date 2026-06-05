@@ -4,23 +4,39 @@ import json
 import yaml
 import random
 import re
+import httpx
 from google import genai
 from openai import OpenAI
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_sync
 
+# Load and interpolate environment variables in configuration
 with open("config.yaml", "r") as f:
-    config = yaml.safe_load(f)
+    config_content = f.read()
+    config_content = os.path.expandvars(config_content)
+    config = yaml.safe_load(config_content)
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"]
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-gemini_client = genai.Client(api_key=GEMINI_KEY)
+# Set up HTTP clients for LLM proxies
+http_proxy = os.environ.get("HTTP_PROXY")
+llm_http_client = None
+if http_proxy:
+    llm_http_client = httpx.Client(proxy=http_proxy)
+
+gemini_client = genai.Client(
+    api_key=GEMINI_KEY,
+    http_options={"client": llm_http_client} if llm_http_client else None,
+)
 
 openrouter_client = (
     OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
+        http_client=llm_http_client,
     )
     if OPENROUTER_KEY
     else None
@@ -30,13 +46,56 @@ openrouter_client = (
 def load_applied():
     if os.path.exists("applied.json"):
         with open("applied.json", "r") as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return []
     return []
 
 
 def save_applied(applied_ids):
     with open("applied.json", "w") as f:
         json.dump(applied_ids, f)
+
+
+def send_telegram_notification(profile_name, title, link, cover_letter):
+    """Sends prepared vacancy details directly to Telegram using direct network (no proxy)"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[WARN] Telegram configuration missing in environment.")
+        return False
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+
+    text = (
+        f"📌 <b>Новая вакансия: {title}</b>\n"
+        f"👤 Профиль: <code>{profile_name}</code>\n"
+        f"🔗 Ссылка: {link}\n\n"
+        f"📝 <b>Сопроводительное письмо:</b>\n"
+        f"<code>{cover_letter}</code>"
+    )
+
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    try:
+        # Explicitly bypass system proxies for Telegram API to avoid Cloudflare blocks on VPN
+        with httpx.Client(proxies={}) as client:
+            response = client.post(url, json=payload, timeout=10.0)
+            if response.status_code == 200:
+                print(f"[TG] Notification sent for vacancy {link}")
+                return True
+            else:
+                print(
+                    f"[TG ERROR] Failed to send: {response.status_code} - {response.text}"
+                )
+                return False
+    except Exception as e:
+        print(f"[TG ERROR] Exception sending to Telegram: {e}")
+        return False
 
 
 def call_llm(prompt, system_instruction=None):
@@ -93,14 +152,6 @@ def human_delay(min_sec=2.0, max_sec=5.0):
     time.sleep(random.uniform(min_sec, max_sec))
 
 
-def simulate_mouse_movement(page):
-    """Simulates random human-like mouse movements"""
-    x = random.randint(100, 800)
-    y = random.randint(100, 800)
-    page.mouse.move(x, y, steps=random.randint(5, 15))
-    human_delay(0.5, 1.5)
-
-
 def extract_applicant_count(text):
     match = re.search(r"(\d+)", text)
     return int(match.group(1)) if match else 0
@@ -119,19 +170,20 @@ def process_profile(page, profile, applied):
         resume_text = f.read()
 
     resume_id = profile["resume_id"]
-    target_resume_title = profile["resume_title"]
 
-    url = f"https://hh.ru/resume/{resume_id}/similar_vacancies"
+    # Use actual frontend search URL by resume
+    url = f"https://hh.ru/search/vacancy?resume={resume_id}"
     page.goto(url, timeout=60000, wait_until="domcontentloaded")
     check_for_captcha(page)
 
     try:
         page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=15000)
     except PlaywrightTimeout:
-        print(f"[ERROR] Элементы вакансий не появились в DOM. Сохраняю debug.png")
+        print(f"[ERROR] No vacancies found. Saving debug.png for diagnostics.")
         page.screenshot(path="debug.png")
         return
 
+    # Simulation of human scrolling
     for _ in range(random.randint(2, 4)):
         page.mouse.wheel(0, random.randint(1000, 2500))
         human_delay(1, 3)
@@ -142,6 +194,7 @@ def process_profile(page, profile, applied):
     for el in vacancy_elements:
         try:
             title_el = el.locator('[data-qa="vacancy-serp__vacancy-title"]')
+            title_text = title_el.inner_text()
             link = title_el.get_attribute("href")
             vid_match = re.search(r"/vacancy/(\d+)", link)
             if not vid_match:
@@ -154,87 +207,60 @@ def process_profile(page, profile, applied):
             stats_text = el.inner_text()
             app_count = extract_applicant_count(stats_text)
 
-            vacancies_data.append({"id": vid, "link": link, "app_count": app_count})
+            vacancies_data.append(
+                {
+                    "id": vid,
+                    "title": title_text,
+                    "link": f"https://hh.ru/vacancy/{vid}",
+                    "app_count": app_count,
+                }
+            )
         except Exception:
             continue
 
     vacancies_data.sort(key=lambda x: x["app_count"])
-    print(f"Found {len(vacancies_data)} new vacancies.")
+    print(f"Found {len(vacancies_data)} new vacancies to evaluate.")
 
     for vac in vacancies_data:
         vid = vac["id"]
-        print(f"Processing: {vid} (Applicants: {vac['app_count']})")
+        print(f"Evaluating: {vac['title']} ({vid}) (Applicants: {vac['app_count']})")
 
         page.goto(vac["link"], timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_load_state("domcontentloaded")
         check_for_captcha(page)
-        simulate_mouse_movement(page)
+        human_delay(1, 3)
 
         try:
             desc_el = page.locator('[data-qa="vacancy-description"]')
             if not desc_el.is_visible():
-                print(f"[WARN] Description not found for {vid}")
+                print(f"[WARN] Description element not found for {vid}")
                 continue
             desc = desc_el.inner_text()
 
+            # Step 1: Pre-filtering
             if not evaluate_vacancy(desc, profile.get("strict_requirements", "")):
                 print(f"[-] Rejected by LLM filter: {vid}")
                 applied.append(vid)
                 save_applied(applied)
                 continue
 
-            print(f"[+] Accepted by LLM filter. Generating cover letter...")
+            print(f"[+] Accepted by LLM. Generating cover letter...")
+
+            # Step 2: Cover letter generation
             cover_letter = generate_cover_letter(resume_text, desc)
 
-            # Locate apply button (can be 'a' or 'button')
-            apply_btn = page.locator('css=[data-qa="vacancy-response-link-top"]')
-            if not apply_btn.is_visible():
-                print(f"[WARN] Apply button not found: {vid}")
+            # Step 3: Telegram notification instead of automated application
+            if send_telegram_notification(
+                profile["name"], vac["title"], vac["link"], cover_letter
+            ):
                 applied.append(vid)
                 save_applied(applied)
-                continue
 
-            simulate_mouse_movement(page)
-            apply_btn.click()
-            human_delay(2, 4)
-
-            resume_select_btn = page.locator('[data-qa="resume-selector"]')
-            if resume_select_btn.is_visible():
-                resume_select_btn.click()
-                human_delay(1, 2)
-                page.locator(f'text="{target_resume_title}"').click()
-                human_delay(1, 2)
-
-            add_letter_btn = page.locator('[data-qa="vacancy-response-letter-toggle"]')
-            if add_letter_btn.is_visible():
-                add_letter_btn.click()
-                human_delay(1, 2)
-
-            letter_input = page.locator(
-                '[data-qa="vacancy-response-popup-form-letter-input"]'
-            )
-            if letter_input.is_visible():
-                # Simulate pasting text instead of instant DOM manipulation
-                letter_input.click()
-                page.keyboard.insert_text(cover_letter)
-                human_delay(2, 4)
-
-            submit_btn = page.locator('[data-qa="vacancy-response-submit-popup"]')
-            if submit_btn.is_visible():
-                simulate_mouse_movement(page)
-                submit_btn.click()
-                print(f"[SUCCESS] Applied to {vid}")
-                applied.append(vid)
-                save_applied(applied)
-            else:
-                print(f"[ERROR] Submit button not found in modal for {vid}")
-
-            human_delay(7, 15)  # Strict anti-ban delay
+            human_delay(3, 7)
 
         except PlaywrightTimeout:
-            print(f"[ERROR] Timeout while processing {vid}")
+            print(f"[ERROR] Timeout while loading vacancy {vid}")
         except Exception as e:
-            print(f"[ERROR] Exception during processing {vid}: {e}")
+            print(f"[ERROR] Exception processing {vid}: {e}")
 
 
 def main():
@@ -248,7 +274,7 @@ def main():
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--no-proxy-server",
+                "--no-proxy-server",  # Force Chromium to bypass system proxies (direct to HH)
             ],
         )
 
@@ -262,7 +288,7 @@ def main():
         )
 
         page = context.new_page()
-        stealth_sync(page)  # Apply stealth patches
+        stealth_sync(page)
 
         for profile in config.get("profiles", []):
             process_profile(page, profile, applied)
