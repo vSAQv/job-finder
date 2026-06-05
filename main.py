@@ -10,7 +10,7 @@ from openai import OpenAI
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_sync
 
-# Load and interpolate environment variables in configuration
+# The configuration file is loaded and environment variables are interpolated.
 with open("config.yaml", "r") as f:
     config_content = f.read()
     config_content = os.path.expandvars(config_content)
@@ -21,12 +21,20 @@ OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
+# The proxy environment variables are configured globally if GLUETUN_PROXY is provided.
+gluetun_proxy = os.environ.get("GLUETUN_PROXY")
+if gluetun_proxy:
+    os.environ["HTTP_PROXY"] = gluetun_proxy
+    os.environ["HTTPS_PROXY"] = gluetun_proxy
+
 gemini_client = genai.Client(api_key=GEMINI_KEY)
 
+# The OpenRouter client is initialized with an HTTP client that bypasses the global environment proxies.
 openrouter_client = (
     OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
+        http_client=httpx.Client(trust_env=False),
     )
     if OPENROUTER_KEY
     else None
@@ -34,6 +42,7 @@ openrouter_client = (
 
 
 def load_applied():
+    # The state database of processed vacancy IDs is loaded.
     if os.path.exists("applied.json"):
         with open("applied.json", "r") as f:
             try:
@@ -44,12 +53,13 @@ def load_applied():
 
 
 def save_applied(applied_ids):
+    # The state database of processed vacancy IDs is saved.
     with open("applied.json", "w") as f:
         json.dump(applied_ids, f)
 
 
 def send_telegram_notification(profile_name, title, link, cover_letter):
-    """Sends prepared vacancy details directly to Telegram using direct network (no proxy)"""
+    # Vacancy details and the generated cover letter are transmitted to Telegram.
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[WARN] Telegram configuration missing in environment.")
         return False
@@ -57,10 +67,10 @@ def send_telegram_notification(profile_name, title, link, cover_letter):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
     text = (
-        f"📌 <b>Новая вакансия: {title}</b>\n"
-        f"👤 Профиль: <code>{profile_name}</code>\n"
-        f"🔗 Ссылка: {link}\n\n"
-        f"📝 <b>Сопроводительное письмо:</b>\n"
+        f"📌 <b>New vacancy: {title}</b>\n"
+        f"👤 Profile: <code>{profile_name}</code>\n"
+        f"🔗 Link: {link}\n\n"
+        f"📝 <b>Cover letter:</b>\n"
         f"<code>{cover_letter}</code>"
     )
 
@@ -72,8 +82,8 @@ def send_telegram_notification(profile_name, title, link, cover_letter):
     }
 
     try:
-        # Explicitly bypass system proxies for Telegram API to avoid Cloudflare blocks on VPN
-        with httpx.Client(proxies={}) as client:
+        # A direct connection is established to avoid VPN blocks by ignoring system environment proxies.
+        with httpx.Client(trust_env=False) as client:
             response = client.post(url, json=payload, timeout=10.0)
             if response.status_code == 200:
                 print(f"[TG] Notification sent for vacancy {link}")
@@ -89,6 +99,7 @@ def send_telegram_notification(profile_name, title, link, cover_letter):
 
 
 def call_llm(prompt, system_instruction=None):
+    # The LLM is queried to process prompts with a fallback mechanism.
     try:
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
@@ -105,14 +116,16 @@ def call_llm(prompt, system_instruction=None):
             messages.append({"role": "system", "content": system_instruction})
         messages.append({"role": "user", "content": prompt})
 
+        # The free model router is utilized as a fallback.
         response = openrouter_client.chat.completions.create(
-            model="google/gemini-2.5-flash:free",
+            model="openrouter/free",
             messages=messages,
         )
         return response.choices[0].message.content.strip()
 
 
 def evaluate_vacancy(vacancy_desc, requirements):
+    # The vacancy description is validated against strict criteria.
     prompt = f"""
     Analyze the following vacancy description.
     Vacancy: {vacancy_desc}
@@ -125,6 +138,7 @@ def evaluate_vacancy(vacancy_desc, requirements):
 
 
 def generate_cover_letter(resume_text, vacancy_desc):
+    # A professional cover letter is drafted using the resume text.
     prompt = f"""
     Write a cover letter for this vacancy based on my resume.
     Resume: {resume_text}
@@ -139,82 +153,87 @@ def generate_cover_letter(resume_text, vacancy_desc):
 
 
 def human_delay(min_sec=2.0, max_sec=5.0):
+    # A pseudo-random pause is introduced to mimic human behavior.
     time.sleep(random.uniform(min_sec, max_sec))
 
 
 def extract_applicant_count(text):
+    # Numbers are extracted from text elements using regex.
     match = re.search(r"(\d+)", text)
     return int(match.group(1)) if match else 0
 
 
 def check_for_captcha(page):
+    # Captcha pages are detected to prevent account blocks.
     if "captcha" in page.url.lower():
         print("[CRITICAL] Captcha detected. Stopping execution to prevent ban.")
         exit(1)
 
 
 def process_profile(page, profile, applied):
+    # Profiles are sequentially processed to evaluate relevant vacancies.
     print(f"--- Starting profile: {profile['name']} ---")
 
     resume_file = profile.get("resume_file")
-    print(f"[DEBUG] Попытка чтения файла резюме: {resume_file}")
+    print(f"[DEBUG] Attempting to read resume file: {resume_file}")
     try:
         with open(resume_file, "r") as f:
             resume_text = f.read()
-        print(f"[DEBUG] Файл резюме успешно прочитан ({len(resume_text)} символов).")
+        print(f"[DEBUG] Resume file successfully read ({len(resume_text)} characters).")
     except Exception as e:
-        print(f"[DEBUG ERROR] Ошибка при чтении файла резюме: {e}")
+        print(f"[DEBUG ERROR] Error reading resume file: {e}")
         return
 
     resume_id = profile.get("resume_id")
-    print(f"[DEBUG] Получен resume_id: '{resume_id}'")
+    print(f"[DEBUG] Received resume_id: '{resume_id}'")
     if not resume_id or resume_id == "None" or "$" in str(resume_id):
-        print(f"[DEBUG ERROR] resume_id невалидный или не распарсился из .env!")
+        print(f"[DEBUG ERROR] resume_id is invalid or failed to parse from env.")
         return
 
     url = f"https://hh.ru/search/vacancy?resume={resume_id}"
-    print(f"[DEBUG] Переход по URL: {url}")
+    print(f"[DEBUG] Navigating to URL: {url}")
 
     try:
+        # The page navigation is attempted with a direct timeout of 20 seconds.
         page.goto(url, timeout=20000, wait_until="domcontentloaded")
-        print("[DEBUG] Навигация успешна. Проверка на капчу...")
+        print("[DEBUG] Navigation successful. Checking for captcha...")
     except Exception as e:
-        print(f"[DEBUG ERROR] Ошибка/Таймаут при переходе page.goto: {e}")
+        print(f"[DEBUG ERROR] Error or timeout during page.goto: {e}")
         try:
             page.screenshot(path="debug_goto_error.png")
-            print("[DEBUG] Скриншот ошибки навигации сохранен.")
+            print("[DEBUG] Navigation error screenshot saved.")
         except Exception as se:
-            print(f"[DEBUG ERROR] Не удалось сделать скриншот: {se}")
+            print(f"[DEBUG ERROR] Failed to capture screenshot: {se}")
         return
 
     check_for_captcha(page)
-    print("[DEBUG] Капча не обнаружена. Ожидание селектора вакансий...")
+    print("[DEBUG] Captcha not detected. Waiting for vacancy selector...")
 
     try:
         page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=10000)
-        print("[DEBUG] Селектор вакансий найден.")
+        print("[DEBUG] Vacancy selector found.")
     except PlaywrightTimeout:
-        print(f"[ERROR] Вакансии не найдены на странице. Сохраняю debug.png")
+        print(f"[ERROR] Vacancies not found on the page. Saving debug.png")
         page.screenshot(path="debug.png")
         return
     except Exception as e:
-        print(f"[DEBUG ERROR] Непредвиденная ошибка ожидания селектора: {e}")
+        print(f"[DEBUG ERROR] Unexpected error waiting for selector: {e}")
         return
 
-    # Simulation of human scrolling
-    print("[DEBUG] Симуляция скроллинга страницы...")
+    print("[DEBUG] Simulating page scrolling...")
     for i in range(random.randint(2, 4)):
-        print(f"[DEBUG] Скролл шаг {i+1}...")
+        print(f"[DEBUG] Scrolling step {i+1}...")
         page.mouse.wheel(0, random.randint(1000, 2500))
         human_delay(1, 3)
 
-    print("[DEBUG] Сбор элементов вакансий...")
-
+    print("[DEBUG] Collecting vacancy elements...")
     vacancy_elements = page.locator('[data-qa="vacancy-serp__vacancy"]').all()
-    vacancies_data = []
+    print(f"[DEBUG] Elements found on the page: {len(vacancy_elements)}")
 
+    vacancies_data = []
     for el in vacancy_elements:
         try:
+            # Current HeadHunter selectors are used to extract information.
             title_el = el.locator('[data-qa="serp-item__title-text"]').first
             title_text = title_el.inner_text(timeout=2000).strip()
 
@@ -241,7 +260,8 @@ def process_profile(page, profile, applied):
                 }
             )
         except Exception as e:
-            print(f"[DEBUG ERROR] Ошибка парсинга отдельной карточки: {e}")
+            # Errors are logged to the console without interrupting execution.
+            print(f"[DEBUG ERROR] Error parsing individual card: {e}")
             continue
 
     vacancies_data.sort(key=lambda x: x["app_count"])
@@ -262,7 +282,7 @@ def process_profile(page, profile, applied):
                 continue
             desc = desc_el.inner_text()
 
-            # Step 1: Pre-filtering
+            # The vacancy description is checked for validity.
             if not evaluate_vacancy(desc, profile.get("strict_requirements", "")):
                 print(f"[-] Rejected by LLM filter: {vid}")
                 applied.append(vid)
@@ -271,10 +291,9 @@ def process_profile(page, profile, applied):
 
             print(f"[+] Accepted by LLM. Generating cover letter...")
 
-            # Step 2: Cover letter generation
             cover_letter = generate_cover_letter(resume_text, desc)
 
-            # Step 3: Telegram notification instead of automated application
+            # The Telegram notification is dispatched.
             if send_telegram_notification(
                 profile["name"], vac["title"], vac["link"], cover_letter
             ):
@@ -290,7 +309,13 @@ def process_profile(page, profile, applied):
 
 
 def main():
+    # The main loop coordinates browser initialization and profile processing.
     applied = load_applied()
+
+    # The proxy environment variables are temporarily removed from the parent process environment.
+    # This prevents the Playwright driver and the spawned Chromium subprocess from inheriting them.
+    http_proxy_backup = os.environ.pop("HTTP_PROXY", None)
+    https_proxy_backup = os.environ.pop("HTTPS_PROXY", None)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -300,11 +325,19 @@ def main():
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
+                # The Chromium instance is forced to bypass system proxies to prevent blocking.
                 "--no-proxy-server",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
             ],
         )
+
+        # The proxy environment variables are restored in the Python process so that
+        # the lazy-loaded Gemini client can utilize them for API requests.
+        if http_proxy_backup:
+            os.environ["HTTP_PROXY"] = http_proxy_backup
+        if https_proxy_backup:
+            os.environ["HTTPS_PROXY"] = https_proxy_backup
 
         if not os.path.exists("state.json"):
             raise FileNotFoundError("state.json not found. Run auth_setup.py first.")
