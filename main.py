@@ -156,31 +156,63 @@ def check_for_captcha(page):
 def process_profile(page, profile, applied):
     print(f"--- Starting profile: {profile['name']} ---")
 
-    with open(profile["resume_file"], "r") as f:
-        resume_text = f.read()
+    resume_file = profile.get("resume_file")
+    print(f"[DEBUG] Попытка чтения файла резюме: {resume_file}")
+    try:
+        with open(resume_file, "r") as f:
+            resume_text = f.read()
+        print(f"[DEBUG] Файл резюме успешно прочитан ({len(resume_text)} символов).")
+    except Exception as e:
+        print(f"[DEBUG ERROR] Ошибка при чтении файла резюме: {e}")
+        return
 
-    resume_id = profile["resume_id"]
+    resume_id = profile.get("resume_id")
+    print(f"[DEBUG] Получен resume_id: '{resume_id}'")
+    if not resume_id or resume_id == "None" or "$" in str(resume_id):
+        print(f"[DEBUG ERROR] resume_id невалидный или не распарсился из .env!")
+        return
 
-    # Use actual frontend search URL by resume
     url = f"https://hh.ru/search/vacancy?resume={resume_id}"
-    page.goto(url, timeout=60000, wait_until="domcontentloaded")
-    check_for_captcha(page)
+    print(f"[DEBUG] Переход по URL: {url}")
 
     try:
-        page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=15000)
+        page.goto(url, timeout=20000, wait_until="domcontentloaded")
+        print("[DEBUG] Навигация успешна. Проверка на капчу...")
+    except Exception as e:
+        print(f"[DEBUG ERROR] Ошибка/Таймаут при переходе page.goto: {e}")
+        try:
+            page.screenshot(path="debug_goto_error.png")
+            print("[DEBUG] Скриншот ошибки навигации сохранен.")
+        except Exception as se:
+            print(f"[DEBUG ERROR] Не удалось сделать скриншот: {se}")
+        return
+
+    check_for_captcha(page)
+    print("[DEBUG] Капча не обнаружена. Ожидание селектора вакансий...")
+
+    try:
+        page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=10000)
+        print("[DEBUG] Селектор вакансий найден.")
     except PlaywrightTimeout:
-        print(f"[ERROR] No vacancies found. Saving debug.png for diagnostics.")
+        print(f"[ERROR] Вакансии не найдены на странице. Сохраняю debug.png")
         page.screenshot(path="debug.png")
+        return
+    except Exception as e:
+        print(f"[DEBUG ERROR] Непредвиденная ошибка ожидания селектора: {e}")
         return
 
     # Simulation of human scrolling
-    for _ in range(random.randint(2, 4)):
+    print("[DEBUG] Симуляция скроллинга страницы...")
+    for i in range(random.randint(2, 4)):
+        print(f"[DEBUG] Скролл шаг {i+1}...")
         page.mouse.wheel(0, random.randint(1000, 2500))
         human_delay(1, 3)
 
+    print("[DEBUG] Сбор элементов вакансий...")
     vacancy_elements = page.locator('[data-qa="vacancy-serp__vacancy"]').all()
-    vacancies_data = []
+    print(f"[DEBUG] Найдено элементов на странице: {len(vacancy_elements)}")
 
+    vacancies_data = []
     for el in vacancy_elements:
         try:
             title_el = el.locator('[data-qa="vacancy-serp__vacancy-title"]')
@@ -257,18 +289,18 @@ def main():
     applied = load_applied()
 
     with sync_playwright() as p:
-       browser = p.chromium.launch(
+        browser = p.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--no-proxy-server",          
-                "--disable-dev-shm-usage",   
-                "--disable-gpu",            
+                "--no-proxy-server",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
             ],
-        ) 
+        )
 
         if not os.path.exists("state.json"):
             raise FileNotFoundError("state.json not found. Run auth_setup.py first.")

@@ -10,6 +10,7 @@ services:
       - HTTP_PROXY=http://gluetun:8888
       - HTTPS_PROXY=http://gluetun:8888
       - NO_PROXY=api.hh.ru,hh.ru
+      - DEBUG=pw:api
     networks:
       - homelab_network
     volumes:
