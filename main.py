@@ -21,22 +21,12 @@ OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# Set up HTTP clients for LLM proxies
-http_proxy = os.environ.get("HTTP_PROXY")
-llm_http_client = None
-if http_proxy:
-    llm_http_client = httpx.Client(proxy=http_proxy)
-
-gemini_client = genai.Client(
-    api_key=GEMINI_KEY,
-    http_options={"client": llm_http_client} if llm_http_client else None,
-)
+gemini_client = genai.Client(api_key=GEMINI_KEY)
 
 openrouter_client = (
     OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
-        http_client=llm_http_client,
     )
     if OPENROUTER_KEY
     else None
@@ -267,16 +257,18 @@ def main():
     applied = load_applied()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+       browser = p.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--no-proxy-server",  # Force Chromium to bypass system proxies (direct to HH)
+                "--no-proxy-server",          
+                "--disable-dev-shm-usage",   
+                "--disable-gpu",            
             ],
-        )
+        ) 
 
         if not os.path.exists("state.json"):
             raise FileNotFoundError("state.json not found. Run auth_setup.py first.")

@@ -3,6 +3,7 @@ services:
     build: .
     container_name: hh-bot
     restart: unless-stopped
+    ipc: host
     env_file:
       - .env
     environment:
