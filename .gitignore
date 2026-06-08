@@ -1,6 +1,6 @@
 .env
 .mypy_cache
-applied.json
+applied.db
 resumes/
 state.json
 config.yaml
