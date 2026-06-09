@@ -9,9 +9,9 @@ services:
     networks:
       - homelab_network
     volumes:
-      - ./config.yaml:/app/config.yaml:ro
-      - ./resumes:/app/resumes:ro
-      - ./applied.json:/app/applied.json
+      - ./config.yaml:/app/config.yaml
+      - ./resumes:/app/resumes
+      - ./applied.db:/app/applied.db  
       - ./state.json:/app/state.json:ro
 
 networks:
