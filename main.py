@@ -6,6 +6,7 @@ import random
 import re
 import sqlite3
 import threading
+import html
 import requests
 import httpx
 import telebot
@@ -15,9 +16,20 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from playwright_stealth import stealth_sync
 
 
-# The configuration file is loaded and environment variables are interpolated.
+# The configuration file is loaded. A default skeleton is created if the file is missing.
 def load_config():
+    if not os.path.exists("config.yaml"):
+        default_config = {"profiles": []}
+        with open("config.yaml", "w") as f:
+            yaml.safe_dump(default_config, f, allow_unicode=True)
+        return default_config
     with open("config.yaml", "r") as f:
+        content = f.read()
+        content = os.environ.get(
+            "GEMINI_API_KEY", ""
+        )  # Placeholder operation to force env interpolation safely
+        content = os.path.expandvars(content)
+        f.seek(0)
         content = f.read()
         content = os.path.expandvars(content)
         return yaml.safe_load(content)
@@ -30,11 +42,12 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # The OpenRouter client is initialized with an HTTP client that bypasses any local environment proxies.
+# A strict 15-second timeout is configured to prevent the client from hanging on congested free endpoints.
 openrouter_client = (
     OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
-        http_client=httpx.Client(trust_env=False),
+        http_client=httpx.Client(trust_env=False, timeout=30.0),
     )
     if OPENROUTER_KEY
     else None
@@ -63,7 +76,8 @@ FALLBACK_MODELS = [
 
 # The SQLite database is initialized and legacy applied.json data is migrated.
 def init_db():
-    conn = sqlite3.connect("applied.db", check_same_thread=False)
+    # Connection timeout is configured to 30 seconds to prevent database locks in parallel threads.
+    conn = sqlite3.connect("applied.db", timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -117,7 +131,7 @@ init_db()
 
 def is_vacancy_processed(vacancy_id, fingerprint):
     # The database is checked for existing IDs or identical company-vacancy fingerprints processed in the last 30 days.
-    conn = sqlite3.connect("applied.db", check_same_thread=False)
+    conn = sqlite3.connect("applied.db", timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute(
         """SELECT 1 FROM vacancies 
@@ -131,7 +145,7 @@ def is_vacancy_processed(vacancy_id, fingerprint):
 
 def save_vacancy(vacancy_id, profile_name, title, link, cover_letter, fingerprint):
     # Processed vacancy details are saved to the database.
-    conn = sqlite3.connect("applied.db", check_same_thread=False)
+    conn = sqlite3.connect("applied.db", timeout=30.0, check_same_thread=False)
     cursor = conn.cursor()
     try:
         cursor.execute(
@@ -195,30 +209,44 @@ def evaluate_vacancy(vacancy_desc, requirements):
 def generate_cover_letter(resume_text, vacancy_desc, contact_info):
     # A professional cover letter is drafted strictly in Russian from first-person singular perspective.
     prompt = f"""
-    You are a professional copywriter writing a job application cover letter in Russian.
-    Analyze the candidate's resume, the vacancy description, and the provided contact information.
-    
-    My Resume:
+    You are a direct, logical, and highly practical business copywriter writing a job cover letter in Russian. 
+
+    ### INPUT DATA (VARIABLES INJECTED ONCE):
+    Candidate Resume:
     {resume_text}
-    
+
     Vacancy Description:
     {vacancy_desc}
-    
-    My Contact Information:
+
+    Contact Information:
     {contact_info}
-    
-    Strict Rules for the letter:
-    1. The letter MUST be written strictly in Russian.
-    2. The letter MUST be written strictly from the FIRST-PERSON SINGULAR perspective (use "Я", "мой", "мне", "мой опыт").
-    3. NEVER write in the second-person plural when describing the candidate's skills. Do NOT write "Ваш опыт позволяет..." or "Вы умеете...". Instead write: "Мой опыт позволяет мне..." or "Я умею...".
-    4. Address the employer/recruiter respectfully as "Вы", "Ваша компания", "Ваши задачи".
-    5. Analyze the vacancy description to identify the company's core goals, implicit problems, or pain points.
-    6. Explicitly state how MY skills and experience will help solve those specific problems and bring value to their business.
-    7. Keep the tone confident, highly professional, and value-oriented.
-    8. Avoid generic cliches and empty phrases.
-    9. Limit the length to exactly 3 short paragraphs.
-    10. Append the formatted contact information ONLY ONCE at the very end of the letter as a professional signature. Do not duplicate contact info anywhere else.
-    11. Ready to send immediately, do not use any placeholders.
+
+    ### STRICT STYLE AND TONE RULES:
+    1. NO AI CLICHÉS: Absolutely forbid typical AI-generated openings and endings. Do NOT write sentences like:
+       - "Надеюсь, это письмо застанет вас в хорошем расположении духа..."
+       - "Пишу вам, чтобы выразить свой искренний интерес к..."
+       - "Спешу предложить свою кандидатуру на роль..."
+       - "В ответ на вашу замечательную вакансию..."
+       - "Буду рад внести свой вклад в ваш успех..."
+    2. NO CORPORATE JARGON: Completely avoid dry, robotic, or pretentious corporate buzzwords. Do NOT use terms like: "синергия", "проактивность", "командный игрок", "стрессоустойчивость", "клиентоориентированность", "динамично развивающийся".
+    3. CONCISENESS & CLARITY: Keep the tone professional, straightforward, and human. Write the way a real, confident specialist speaks — dryly, politely, but without servility or watery formalities.
+    4. PERSONALIZATION ONLY: The recruiter must immediately see that this is a custom-written letter, not a template. Do not use any placeholders, draft brackets (like "[Имя]", "[Название компании]"), or generic phrases. If the company name is not mentioned in the vacancy description, refer to it as "Ваша команда" or "Ваш проект".
+
+    ### STRUCTURAL REQUIREMENTS:
+    Write strictly 3 short, punchy paragraphs followed by the direct contact info:
+
+    - Paragraph 1: Direct opening. State clearly that you are interested in the part-time/project-based position of a Business Assistant / PM Assistant. Explicitly reference at least two specific tasks, requirements, or projects mentioned in the vacancy description to prove you have studied it thoroughly.
+    - Paragraph 2: Solution matching. Do not just list your skills. Explicitly map your real accomplishments (from the candidate's resume) directly to the company's pain points (from the vacancy description). If they need automation, mention how you wrote JS tools for tracking. If they need scaling/management, mention how you scaled operations from 1 to 30+ assets. If they need research, mention your OSINT background. Keep it factual and metrics-oriented.
+    - Paragraph 3: Schedule alignment & Call to action. State that your target workload is up to 30 hours per week (part-time). Propose a brief chat to discuss how your operations and automation background can free up the manager's time.
+
+    ### OUTPUT FORMAT:
+    Output ONLY the final text of the cover letter. Do not include any intro, outro, explanations, or quotes.
+
+    [Your 3-paragraph letter here]
+
+    С уважением,
+    [Extract candidate's real name from the contact information block]
+    [Extract real Telegram and Email from the contact information block]
     """
     return call_llm(prompt)
 
@@ -241,8 +269,8 @@ def check_for_captcha(page):
         exit(1)
 
 
-def process_profile(page, profile):
-    # Active profiles are processed using native HH query parameters to pre-filter search results.
+def process_profile(context, page, profile):
+    # Active profiles are processed using resume matchmaking.
     if not profile.get("enabled", True):
         print(f"[DEBUG] Profile {profile['name']} is disabled. Skipping.")
         return
@@ -259,96 +287,141 @@ def process_profile(page, profile):
         return
 
     resume_id = profile.get("resume_id")
-
-    # URL construction includes native HH query parameters to perform pre-filtering.
-    url = f"https://hh.ru/search/vacancy?resume={resume_id}"
-    filters = profile.get("filters", {})
-    if filters:
-        for key, values in filters.items():
-            if isinstance(values, list):
-                for val in values:
-                    url += f"&{key}={val}"
-            else:
-                url += f"&{key}={values}"
-
-    print(f"[DEBUG] Navigating to URL: {url}")
-
-    try:
-        page.goto(url, timeout=20000, wait_until="domcontentloaded")
-        print("[DEBUG] Navigation successful. Checking for captcha...")
-    except Exception as e:
-        print(f"[DEBUG ERROR] Error or timeout during page.goto: {e}")
+    if not resume_id:
+        print("[DEBUG ERROR] resume_id is not specified in the profile!")
         return
 
-    check_for_captcha(page)
-
-    try:
-        page.wait_for_selector('[data-qa="vacancy-serp__vacancy"]', timeout=10000)
-    except PlaywrightTimeout:
-        print(f"[DEBUG] No matching vacancies found for profile: {profile['name']}")
-        return
-
-    # Simulation of human scrolling
-    for i in range(random.randint(2, 4)):
-        page.mouse.wheel(0, random.randint(1000, 2500))
-        human_delay(1, 3)
-
-    vacancy_elements = page.locator('[data-qa="vacancy-serp__vacancy"]').all()
+    # Filter arrays are parsed into sequential native search queries.
+    queries_list = profile.get("queries") or [{}]
+    global_filters = profile.get("global_filters") or {}
+    pages_to_scrape = profile.get("pages_to_scrape", 1)
     vacancies_data = []
 
-    for el in vacancy_elements:
-        try:
-            # Current HeadHunter selectors are used to extract information.
-            title_el = el.locator('[data-qa="serp-item__title-text"]').first
-            title_text = title_el.inner_text(timeout=2000).strip()
+    # The scraper iterates over each filter query block defined in the profile (OR logic).
+    for q_idx, query_filters in enumerate(queries_list):
+        # The query parameters are constructed by merging global filters with the specific query block.
+        merged_filters = {}
+        for k, v in global_filters.items():
+            merged_filters[k] = list(v) if isinstance(v, list) else [v]
 
-            link_el = el.locator('a[data-qa="serp-item__title"]').first
-            link = link_el.get_attribute("href", timeout=2000)
+        for k, v in query_filters.items():
+            v_list = list(v) if isinstance(v, list) else [v]
+            if k in merged_filters:
+                # Lists are merged avoiding duplicates to leverage HH's native OR logic.
+                merged_filters[k] = list(set(merged_filters[k] + v_list))
+            else:
+                merged_filters[k] = v_list
 
-            vid_match = re.search(r"/vacancy/(\d+)", link)
-            if not vid_match:
-                continue
-            vid = vid_match.group(1)
+        print(
+            f"[DEBUG] Processing query block {q_idx+1}/{len(queries_list)}: {merged_filters}"
+        )
 
-            # The company name is extracted to form a unique fingerprint.
+        # Standard search base URL is constructed with initial parameters mimicking desktop browser.
+        base_url = (
+            f"https://hh.ru/search/vacancy?"
+            f"enable_snippets=true"
+            f"&ored_clusters=true"
+            f"&resume={resume_id}"
+            f"&order_by=publication_time"
+            f"&search_field=name"
+            f"&search_field=company_name"
+            f"&search_field=description"
+        )
+
+        if merged_filters:
+            for key, values in merged_filters.items():
+                for val in values:
+                    base_url += f"&{key}={val}"
+
+        # The scraper paginates through the results up to pages_to_scrape.
+        for page_idx in range(pages_to_scrape):
+            page_url = base_url + f"&page={page_idx}"
+            print(f"[DEBUG] Navigating to page {page_idx}: {page_url}")
+
             try:
-                employer_el = el.locator('[data-qa="serp-item__employer"]').first
-                company_name = employer_el.inner_text(timeout=2000).strip()
-            except Exception:
-                company_name = "Anonymous"
-
-            fingerprint = f"{company_name}:{title_text}"
-
-            if is_vacancy_processed(vid, fingerprint):
+                page.goto(page_url, timeout=20000, wait_until="domcontentloaded")
+                check_for_captcha(page)
+            except Exception as e:
+                print(f"[DEBUG ERROR] Error or timeout during page.goto: {e}")
                 continue
 
-            stats_text = el.inner_text()
-            app_count = extract_applicant_count(stats_text)
+            try:
+                page.wait_for_selector(
+                    '[data-qa="vacancy-serp__vacancy"]', timeout=5000
+                )
+            except PlaywrightTimeout:
+                print(
+                    f"[DEBUG] No more vacancies found on page {page_idx} for current query block."
+                )
+                break
 
-            vacancies_data.append(
-                {
-                    "id": vid,
-                    "title": title_text,
-                    "link": f"https://hh.ru/vacancy/{vid}",
-                    "app_count": app_count,
-                    "fingerprint": fingerprint,
-                }
-            )
-        except Exception as e:
-            continue
+            # Human-like scrolling is simulated to trigger dynamic content loading.
+            for i in range(random.randint(1, 2)):
+                page.mouse.wheel(0, random.randint(1000, 2000))
+                human_delay(1, 2)
 
+            vacancy_elements = page.locator('[data-qa="vacancy-serp__vacancy"]').all()
+            print(f"[DEBUG] Elements found on page {page_idx}: {len(vacancy_elements)}")
+
+            for el in vacancy_elements:
+                try:
+                    # Current HeadHunter selectors are used to extract information.
+                    title_el = el.locator('[data-qa="serp-item__title-text"]').first
+                    title_text = title_el.inner_text(timeout=2000).strip()
+
+                    link_el = el.locator('a[data-qa="serp-item__title"]').first
+                    link = link_el.get_attribute("href", timeout=2000)
+
+                    vid_match = re.search(r"/vacancy/(\d+)", link)
+                    if not vid_match:
+                        continue
+                    vid = vid_match.group(1)
+
+                    # The company name is extracted to form a unique fingerprint.
+                    try:
+                        employer_el = el.locator(
+                            '[data-qa="serp-item__employer"]'
+                        ).first
+                        company_name = employer_el.inner_text(timeout=2000).strip()
+                    except Exception:
+                        company_name = "Anonymous"
+
+                    fingerprint = f"{company_name}:{title_text}"
+
+                    if is_vacancy_processed(vid, fingerprint):
+                        continue
+
+                    stats_text = el.inner_text()
+                    app_count = extract_applicant_count(stats_text)
+
+                    vacancies_data.append(
+                        {
+                            "id": vid,
+                            "title": title_text,
+                            "link": f"https://hh.ru/vacancy/{vid}",
+                            "app_count": app_count,
+                            "fingerprint": fingerprint,
+                        }
+                    )
+                except Exception as e:
+                    continue
+
+    # All collected results across different queries and pages are sorted in memory by applicant count.
     vacancies_data.sort(key=lambda x: x["app_count"])
-    print(f"Found {len(vacancies_data)} new pre-filtered vacancies to evaluate.")
+    print(
+        f"Found {len(vacancies_data)} total unique pre-filtered vacancies to evaluate."
+    )
 
     for vac in vacancies_data:
         vid = vac["id"]
         print(f"Evaluating: {vac['title']} ({vid})")
 
-        page.goto(vac["link"], timeout=60000, wait_until="domcontentloaded")
-        check_for_captcha(page)
-        human_delay(1, 3)
-
         try:
+            # The page navigation is attempted inside a protected block to prevent target crash failure.
+            page.goto(vac["link"], timeout=60000, wait_until="domcontentloaded")
+            check_for_captcha(page)
+            human_delay(1, 3)
+
             desc_el = page.locator('[data-qa="vacancy-description"]')
             if not desc_el.is_visible():
                 continue
@@ -394,10 +467,24 @@ def process_profile(page, profile):
                 vac["fingerprint"],
             )
 
-            human_delay(3, 7)
-
         except Exception as e:
             print(f"[ERROR] Exception processing {vid}: {e}")
+            # If the browser page crashed or target closed, a new page is initialized to recover the context.
+            if (
+                "crash" in str(e).lower()
+                or "close" in str(e).lower()
+                or "target" in str(e).lower()
+            ):
+                print(
+                    "[SYSTEM] Playwright page crashed or closed. Recovering context..."
+                )
+                try:
+                    page.close()
+                except Exception:
+                    pass
+                # A fresh page is initialized and configured with stealth patches to restore the execution environment.
+                page = context.new_page()
+                stealth_sync(page)
 
 
 def run_scraping_cycle():
@@ -425,14 +512,17 @@ def run_scraping_cycle():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         )
 
-        page = context.new_page()
-        stealth_sync(page)
+        try:
+            page = context.new_page()
+            stealth_sync(page)
 
-        for profile in config.get("profiles", []):
-            if profile.get("enabled", True):
-                process_profile(page, profile)
+            for profile in config.get("profiles", []):
+                if profile.get("enabled", True):
+                    process_profile(context, page, profile)
 
-        browser.close()
+        finally:
+            # The browser context is explicitly closed in a finally block to prevent memory leaks.
+            browser.close()
 
 
 def scraper_worker():
@@ -655,11 +745,16 @@ def callback_view_unread(call):
 
     for row in rows:
         vac_id, title, link, cover_letter = row
+
+        # Special HTML characters are escaped to prevent Telegram markup parsing errors.
+        safe_title = html.escape(title)
+        safe_cover_letter = html.escape(cover_letter)
+
         text = (
-            f"📌 <b>{title}</b>\n"
+            f"📌 <b>{safe_title}</b>\n"
             f"🔗 Link: {link}\n\n"
             f"📝 <b>Cover Letter:</b>\n"
-            f"<code>{cover_letter}</code>"
+            f"<code>{safe_cover_letter}</code>"
         )
         cursor.execute("UPDATE vacancies SET is_read = 1 WHERE id = ?", (vac_id,))
         conn.commit()
@@ -708,7 +803,7 @@ def callback_edit_req_start(call):
     msg = bot.send_message(
         call.message.chat.id,
         f"The current strict requirements for profile <b>{profile_name}</b> are:\n\n"
-        f"<code>{current_req}</code>\n\n"
+        f"<code>{html.escape(current_req)}</code>\n\n"
         "Click the code block above to copy the requirements, edit the text, and send it to me. Or click Cancel below to abort.",
         parse_mode="HTML",
         reply_markup=get_cancel_keyboard(),
@@ -747,9 +842,13 @@ def handle_add_profile_yaml(message):
         'resume_file: "resumes/devops.txt"\n'
         'contact_info: "Name: ...\\nPhone: ..."\n'
         'strict_requirements: "Junior or Mid level..."\n'
-        "filters:\n"
-        '  schedule: ["remote"]\n'
-        '  employment: ["part"]'
+        "pages_to_scrape: 1\n"
+        "global_filters:\n"
+        '  work_format: ["REMOTE"]\n'
+        "queries:\n"
+        '  - employment_form: ["PART"]\n'
+        '  - work_schedule_by_days: ["FLEXIBLE", "TWO_ON_TWO_OFF"]\n'
+        '    working_hours: ["HOURS_4"]'
     )
     msg = bot.send_message(
         message.chat.id,
@@ -872,6 +971,13 @@ if __name__ == "__main__":
     # The scraping loop is started in a separate daemon thread.
     threading.Thread(target=scraper_worker, daemon=True).start()
 
-    # The Telegram bot starts polling.
+    # The Telegram bot starts polling with a self-healing retry structure.
     print("[SYSTEM] Starting interactive Telegram bot interface...")
-    bot.infinity_polling()
+    while True:
+        try:
+            bot.infinity_polling()
+        except Exception as e:
+            print(
+                f"[SYSTEM ERROR] Telegram polling failed: {e}. Retrying in 10 seconds..."
+            )
+            time.sleep(10)
