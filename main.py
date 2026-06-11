@@ -38,6 +38,7 @@ def load_config():
 config = load_config()
 
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "google/gemma-4-31b-it:free")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
@@ -62,15 +63,19 @@ telebot.apihelper.session = session
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 # A list of highly performant free models is maintained for sequential fallback execution.
-FALLBACK_MODELS = [
-    "openrouter/owl-alpha",
-    "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "nvidia/nemotron-3-super-120b-a12b:free",
-    "google/gemma-4-31b-it:free",
-    "openai/gpt-oss-120b:free",
-    "poolside/laguna-m.1:free",
-    "z-ai/glm-4.5-air:free",
-    "openrouter/free",
+FALLBACK_MODELS = [OPENROUTER_MODEL] + [
+    m
+    for m in [
+        "openrouter/owl-alpha",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "google/gemma-4-31b-it:free",
+        "openai/gpt-oss-120b:free",
+        "poolside/laguna-m.1:free",
+        "z-ai/glm-4.5-air:free",
+        "openrouter/free",
+    ]
+    if m != OPENROUTER_MODEL
 ]
 
 
