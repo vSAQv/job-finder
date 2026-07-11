@@ -66,14 +66,16 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 FALLBACK_MODELS = [OPENROUTER_MODEL] + [
     m
     for m in [
-        "openrouter/owl-alpha",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "google/gemma-4-31b-it:free",
-        "openai/gpt-oss-120b:free",
-        "poolside/laguna-m.1:free",
-        "z-ai/glm-4.5-air:free",
-        "openrouter/free",
+        "google/gemma-4-31b-it:free",              
+        "tencent/hy3:free",                       
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "openai/gpt-oss-120b:free",             
+        "google/gemma-4-26b-a4b-it:free",      
+        "nvidia/nemotron-3-super-120b-a12b:free", 
+        "qwen/qwen3-coder:free",                 
+        "nousresearch/hermes-3-405b:free",      
+        "poolside/laguna-m.1:free",            
+        "openrouter/free",                    
     ]
     if m != OPENROUTER_MODEL
 ]
