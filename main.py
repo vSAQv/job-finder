@@ -14,6 +14,7 @@ from telebot import types
 from openai import OpenAI
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_sync
+from model_router import ModelPool, OPENROUTER_MODELS_URL
 
 
 # The configuration file is loaded. A default skeleton is created if the file is missing.
@@ -54,7 +55,7 @@ openrouter_client = (
     else None
 )
 
-# The Telegram bot is configured with a custom session that ignores system environment proxies.
+# The Telegram bot client is configured with a session that ignores system environment proxies.
 session = requests.Session()
 session.trust_env = False
 telebot.apihelper.session = session
@@ -62,23 +63,50 @@ telebot.apihelper.session = session
 # The Telegram bot client is initialized.
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
-# A list of highly performant free models is maintained for sequential fallback execution.
-FALLBACK_MODELS = [OPENROUTER_MODEL] + [
-    m
-    for m in [
-        "google/gemma-4-31b-it:free",              
-        "tencent/hy3:free",                       
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "openai/gpt-oss-120b:free",             
-        "google/gemma-4-26b-a4b-it:free",      
-        "nvidia/nemotron-3-super-120b-a12b:free", 
-        "qwen/qwen3-coder:free",                 
-        "nousresearch/hermes-3-405b:free",      
-        "poolside/laguna-m.1:free",            
-        "openrouter/free",                    
-    ]
-    if m != OPENROUTER_MODEL
-]
+
+def _fetch_models_payload(url):
+    # A dedicated client is used so the models list is fetched without
+    # inheriting any host proxy settings configured for the OpenAI client.
+    with httpx.Client(trust_env=False, timeout=20.0) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _probe_model(model: str, prompt: str):
+    """Run a one-shot probe completion and return (reply, latency)."""
+    if not openrouter_client:
+        return None, 0.0
+    started = time.time()
+    try:
+        response = openrouter_client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=8,
+        )
+        reply = response.choices[0].message.content
+        return reply, time.time() - started
+    except Exception:
+        return None, time.time() - started
+
+
+# Model selection is dynamic: free models on OpenRouter rotate and endpoints
+# fail transiently, so a hard-coded list goes stale and breaks the bot. The
+# pool re-ranks candidates per task profile (judge vs writer) using live
+# probes and caches the result across scraper cycles.
+model_pool = ModelPool(probe=_probe_model)
+
+
+def _refresh_model_pool():
+    # Probing can take tens of seconds when endpoints are slow; refresh in a
+    # daemon thread so Telegram polling starts immediately on boot.
+    try:
+        model_pool.refresh(_fetch_models_payload)
+    except Exception as e:
+        print(f"[SYSTEM] Model pool refresh failed: {e}")
+
+
+threading.Thread(target=_refresh_model_pool, daemon=True).start()
 
 
 # The SQLite database is initialized and legacy applied.json data is migrated.
@@ -165,8 +193,9 @@ def save_vacancy(vacancy_id, profile_name, title, link, cover_letter, fingerprin
     conn.close()
 
 
-def call_llm(prompt, system_instruction=None):
-    # The LLM is queried sequentially across multiple fallback models to ensure fault tolerance.
+def call_llm(prompt, system_instruction=None, task="judge"):
+    # The LLM is queried sequentially across the ranked pool for the given task
+    # profile to ensure fault tolerance against transient endpoint failures.
     if not openrouter_client:
         raise Exception("OpenRouter client not configured.")
 
@@ -176,7 +205,7 @@ def call_llm(prompt, system_instruction=None):
     messages.append({"role": "user", "content": prompt})
 
     last_error = None
-    for model in FALLBACK_MODELS:
+    for model in model_pool.get_ranked(task, override=OPENROUTER_MODEL):
         try:
             print(f"[LLM] Attempting inference with model: {model}")
             response = openrouter_client.chat.completions.create(
@@ -209,7 +238,7 @@ def evaluate_vacancy(vacancy_desc, requirements):
     
     Reply ONLY with 'YES' or 'NO'. No other text.
     """
-    result = call_llm(prompt).upper()
+    result = call_llm(prompt, task="judge").upper()
     return "YES" in result
 
 
@@ -255,7 +284,7 @@ def generate_cover_letter(resume_text, vacancy_desc, contact_info):
     [Extract candidate's real name from the contact information block]
     [Extract real Telegram and Email from the contact information block]
     """
-    return call_llm(prompt)
+    return call_llm(prompt, task="writer")
 
 
 def human_delay(min_sec=2.0, max_sec=5.0):
@@ -536,6 +565,12 @@ def scraper_worker():
     # The scraper background thread runs the cycle periodically.
     while True:
         print("[SCRAPER] Starting periodic scraping cycle...")
+        # Free model availability rotates; refresh the ranked pools when the
+        # TTL timer expires without stalling an already-running cycle.
+        try:
+            model_pool.refresh(_fetch_models_payload)
+        except Exception as e:
+            print(f"[SCRAPER ERROR] Model pool refresh failed: {e}")
         try:
             run_scraping_cycle()
         except Exception as e:
