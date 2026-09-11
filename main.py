@@ -14,7 +14,7 @@ from telebot import types
 from openai import OpenAI
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_sync
-from model_router import ModelPool, OPENROUTER_MODELS_URL
+from model_router import POOLS, ModelPool, OPENROUTER_MODELS_URL, default_override
 
 
 # The configuration file is loaded. A default skeleton is created if the file is missing.
@@ -73,7 +73,7 @@ def _fetch_models_payload(url):
         return resp.json()
 
 
-def _probe_model(model: str, prompt: str):
+def _probe_model(model: str, prompt: str, max_tokens: int = 8):
     """Run a one-shot probe completion and return (reply, latency)."""
     if not openrouter_client:
         return None, 0.0
@@ -82,7 +82,7 @@ def _probe_model(model: str, prompt: str):
         response = openrouter_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=8,
+            max_tokens=max_tokens,
         )
         reply = response.choices[0].message.content
         return reply, time.time() - started
@@ -90,11 +90,27 @@ def _probe_model(model: str, prompt: str):
         return None, time.time() - started
 
 
+def _rate_writer(prompt: str):
+    """Run one combined Russian-quality judging completion and return the raw reply."""
+    if not openrouter_client:
+        return None
+    try:
+        response = openrouter_client.chat.completions.create(
+            # A neutral, obedient free model rates the writing samples.
+            model=default_override() or POOLS["writer"][1],
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=256,
+        )
+        return response.choices[0].message.content
+    except Exception:
+        return None
+
+
 # Model selection is dynamic: free models on OpenRouter rotate and endpoints
 # fail transiently, so a hard-coded list goes stale and breaks the bot. The
 # pool re-ranks candidates per task profile (judge vs writer) using live
 # probes and caches the result across scraper cycles.
-model_pool = ModelPool(probe=_probe_model)
+model_pool = ModelPool(probe=_probe_model, rater=_rate_writer)
 
 
 def _refresh_model_pool():
@@ -375,15 +391,18 @@ def process_profile(context, page, profile):
             print(f"[DEBUG] Navigating to page {page_idx}: {page_url}")
 
             try:
-                page.goto(page_url, timeout=20000, wait_until="domcontentloaded")
+                page.goto(page_url, timeout=30000, wait_until="domcontentloaded")
                 check_for_captcha(page)
             except Exception as e:
                 print(f"[DEBUG ERROR] Error or timeout during page.goto: {e}")
                 continue
 
             try:
+                # Vacancy cards render client-side and can take well over 5
+                # seconds on slow or throttled connections; an aggressively
+                # short wait used to mark fully loaded result pages as empty.
                 page.wait_for_selector(
-                    '[data-qa="vacancy-serp__vacancy"]', timeout=5000
+                    '[data-qa="vacancy-serp__vacancy"]', timeout=30000
                 )
             except PlaywrightTimeout:
                 print(
@@ -403,10 +422,10 @@ def process_profile(context, page, profile):
                 try:
                     # Current HeadHunter selectors are used to extract information.
                     title_el = el.locator('[data-qa="serp-item__title-text"]').first
-                    title_text = title_el.inner_text(timeout=2000).strip()
+                    title_text = title_el.inner_text(timeout=8000).strip()
 
                     link_el = el.locator('a[data-qa="serp-item__title"]').first
-                    link = link_el.get_attribute("href", timeout=2000)
+                    link = link_el.get_attribute("href", timeout=8000)
 
                     vid_match = re.search(r"/vacancy/(\d+)", link)
                     if not vid_match:
@@ -416,9 +435,9 @@ def process_profile(context, page, profile):
                     # The company name is extracted to form a unique fingerprint.
                     try:
                         employer_el = el.locator(
-                            '[data-qa="serp-item__employer"]'
+                            '[data-qa="vacancy-serp__vacancy-employer"]'
                         ).first
-                        company_name = employer_el.inner_text(timeout=2000).strip()
+                        company_name = employer_el.inner_text(timeout=8000).strip()
                     except Exception:
                         company_name = "Anonymous"
 
