@@ -14,7 +14,7 @@ from telebot import types
 from openai import OpenAI
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 from playwright_stealth import stealth_sync
-from model_router import POOLS, ModelPool, OPENROUTER_MODELS_URL, default_override
+from model_router import ModelPool, _normalize_token, _writer_sane
 
 
 # The configuration file is loaded. A default skeleton is created if the file is missing.
@@ -64,65 +64,12 @@ telebot.apihelper.session = session
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 
 
-def _fetch_models_payload(url):
-    # A dedicated client is used so the models list is fetched without
-    # inheriting any host proxy settings configured for the OpenAI client.
-    with httpx.Client(trust_env=False, timeout=20.0) as client:
-        resp = client.get(url)
-        resp.raise_for_status()
-        return resp.json()
-
-
-def _probe_model(model: str, prompt: str, max_tokens: int = 8):
-    """Run a one-shot probe completion and return (reply, latency)."""
-    if not openrouter_client:
-        return None, 0.0
-    started = time.time()
-    try:
-        response = openrouter_client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-        )
-        reply = response.choices[0].message.content
-        return reply, time.time() - started
-    except Exception:
-        return None, time.time() - started
-
-
-def _rate_writer(prompt: str):
-    """Run one combined Russian-quality judging completion and return the raw reply."""
-    if not openrouter_client:
-        return None
-    try:
-        response = openrouter_client.chat.completions.create(
-            # A neutral, obedient free model rates the writing samples.
-            model=default_override() or POOLS["writer"][1],
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=256,
-        )
-        return response.choices[0].message.content
-    except Exception:
-        return None
-
-
-# Model selection is dynamic: free models on OpenRouter rotate and endpoints
-# fail transiently, so a hard-coded list goes stale and breaks the bot. The
-# pool re-ranks candidates per task profile (judge vs writer) using live
-# probes and caches the result across scraper cycles.
-model_pool = ModelPool(probe=_probe_model, rater=_rate_writer)
-
-
-def _refresh_model_pool():
-    # Probing can take tens of seconds when endpoints are slow; refresh in a
-    # daemon thread so Telegram polling starts immediately on boot.
-    try:
-        model_pool.refresh(_fetch_models_payload)
-    except Exception as e:
-        print(f"[SYSTEM] Model pool refresh failed: {e}")
-
-
-threading.Thread(target=_refresh_model_pool, daemon=True).start()
+# Model selection is deliberately static and lean: free endpoints rotate, so
+# probing or re-ranking every cycle wastes requests and is fragile under rate
+# limits. The curated pools in model_router are seeded from verified live
+# usage; reliability comes from enforcing every reply at runtime (exact
+# YES/NO for judge, Russian sanity for writer) and demoting failed endpoints.
+model_pool = ModelPool()
 
 
 # The SQLite database is initialized and legacy applied.json data is migrated.
@@ -209,9 +156,12 @@ def save_vacancy(vacancy_id, profile_name, title, link, cover_letter, fingerprin
     conn.close()
 
 
-def call_llm(prompt, system_instruction=None, task="judge"):
-    # The LLM is queried sequentially across the ranked pool for the given task
-    # profile to ensure fault tolerance against transient endpoint failures.
+def call_llm(prompt, system_instruction=None, task="judge", validator=None):
+    # The LLM is queried sequentially across the static pool for the given task
+    # profile. Each reply is enforced: judge must be an exact YES/NO token, and
+    # writer output must pass a Russian sanity check. A malformed or failed
+    # reply falls through to the next model and the failing model is demoted
+    # for a cooldown so broken endpoints are not retried first.
     if not openrouter_client:
         raise Exception("OpenRouter client not configured.")
 
@@ -228,9 +178,17 @@ def call_llm(prompt, system_instruction=None, task="judge"):
                 model=model,
                 messages=messages,
             )
-            return response.choices[0].message.content.strip()
+            reply = response.choices[0].message.content.strip()
+            if validator and not validator(reply):
+                print(f"[LLM WARN] Model {model} reply failed validation; "
+                      "trying next fallback...")
+                model_pool.mark_failure(task, model)
+                last_error = Exception("reply failed validation")
+                continue
+            return reply
         except Exception as e:
             print(f"[LLM WARN] Model {model} failed: {e}. Trying next fallback...")
+            model_pool.mark_failure(task, model)
             last_error = e
             continue
 
@@ -254,7 +212,7 @@ def evaluate_vacancy(vacancy_desc, requirements):
     
     Reply ONLY with 'YES' or 'NO'. No other text.
     """
-    result = call_llm(prompt, task="judge").upper()
+    result = call_llm(prompt, task="judge", validator=lambda r: _normalize_token(r) is not None).upper()
     return "YES" in result
 
 
@@ -300,7 +258,7 @@ def generate_cover_letter(resume_text, vacancy_desc, contact_info):
     [Extract candidate's real name from the contact information block]
     [Extract real Telegram and Email from the contact information block]
     """
-    return call_llm(prompt, task="writer")
+    return call_llm(prompt, task="writer", validator=_writer_sane)
 
 
 def human_delay(min_sec=2.0, max_sec=5.0):
@@ -584,12 +542,6 @@ def scraper_worker():
     # The scraper background thread runs the cycle periodically.
     while True:
         print("[SCRAPER] Starting periodic scraping cycle...")
-        # Free model availability rotates; refresh the ranked pools when the
-        # TTL timer expires without stalling an already-running cycle.
-        try:
-            model_pool.refresh(_fetch_models_payload)
-        except Exception as e:
-            print(f"[SCRAPER ERROR] Model pool refresh failed: {e}")
         try:
             run_scraping_cycle()
         except Exception as e:
