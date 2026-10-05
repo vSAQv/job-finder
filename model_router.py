@@ -39,18 +39,20 @@ from typing import Dict, List, Optional
 # as tail fallbacks and demoted on failure.
 POOLS: Dict[str, List[str]] = {
     "judge": [
+        "qwen/qwen3.8-27b:free",
+        "thinkingmachines/inkling-small:free",
+        "thinkingmachines/inkling:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "google/gemma-4-31b-it:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "google/gemma-4-26b-a4b-it:free",
     ],
     "writer": [
-        "google/gemma-4-31b-it:free",
+        "qwen/qwen3.8-27b:free",
+        "thinkingmachines/inkling-small:free",
+        "thinkingmachines/inkling:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "google/gemma-4-26b-a4b-it:free",
-        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
     ],
 }
 
@@ -70,7 +72,7 @@ def _writer_sane(reply: Optional[str]) -> bool:
     if not reply:
         return False
     stripped = reply.strip()
-    cyr = sum(1 for ch in stripped if "\u0400" <= ch <= "\u04FF")
+    cyr = sum(1 for ch in stripped if "\u0400" <= ch <= "\u04ff")
     if cyr == 0:
         return False
     if len(stripped.split()) < 6:
@@ -121,3 +123,4 @@ class ModelPool:
         with self._lock:
             if model in POOLS.get(task, []):
                 self._demoted_until[model] = time.time() + self._demotion_seconds
+
