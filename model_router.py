@@ -39,20 +39,21 @@ from typing import Dict, List, Optional
 # as tail fallbacks and demoted on failure.
 POOLS: Dict[str, List[str]] = {
     "judge": [
-        "qwen/qwen3.8-27b:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "inclusionai/ling-3.1-flash",
         "thinkingmachines/inkling-small:free",
         "thinkingmachines/inkling:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "google/gemma-4-26b-a4b-it:free",
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
         "google/gemma-4-31b-it:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "google/gemma-4-26b-a4b-it:free",
     ],
     "writer": [
-        "qwen/qwen3.8-27b:free",
+        "inclusionai/ling-3.1-flash",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "google/gemma-4-26b-a4b-it:free",
         "thinkingmachines/inkling-small:free",
         "thinkingmachines/inkling:free",
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
     ],
 }
 
@@ -123,4 +124,3 @@ class ModelPool:
         with self._lock:
             if model in POOLS.get(task, []):
                 self._demoted_until[model] = time.time() + self._demotion_seconds
-
