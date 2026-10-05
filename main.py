@@ -216,47 +216,267 @@ def evaluate_vacancy(vacancy_desc, requirements):
     return "YES" in result
 
 
-def generate_cover_letter(resume_text, vacancy_desc, contact_info):
+def generate_cover_letter(resume_text, vacancy_title, vacancy_desc, contact_info):
     # A professional cover letter is drafted strictly in Russian from first-person singular perspective.
     prompt = f"""
-    You are a direct, logical, and highly practical business copywriter writing a job cover letter in Russian. 
+    You write short, natural Russian cover letters for real job applications on HH.ru.
 
-    ### INPUT DATA (VARIABLES INJECTED ONCE):
-    Candidate Resume:
-    {resume_text}
+Your goal is to write a concise letter specifically for the vacancy below. The letter must make clear:
 
-    Vacancy Description:
-    {vacancy_desc}
+1. which position the candidate is applying for;
+2. that the vacancy was actually read;
+3. which parts of the candidate's real experience are relevant;
+4. that the candidate is looking for part-time, project-based, or flexible work, preferably up to 30 hours per week;
+5. that there is a reason to invite the candidate to a short conversation.
 
-    Contact Information:
-    {contact_info}
+Do not rewrite the resume. Select only the information that is useful for this particular vacancy.
 
-    ### STRICT STYLE AND TONE RULES:
-    1. NO AI CLICHÉS: Absolutely forbid typical AI-generated openings and endings. Do NOT write sentences like:
-       - "Надеюсь, это письмо застанет вас в хорошем расположении духа..."
-       - "Пишу вам, чтобы выразить свой искренний интерес к..."
-       - "Спешу предложить свою кандидатуру на роль..."
-       - "В ответ на вашу замечательную вакансию..."
-       - "Буду рад внести свой вклад в ваш успех..."
-    2. NO CORPORATE JARGON: Completely avoid dry, robotic, or pretentious corporate buzzwords. Do NOT use terms like: "синергия", "проактивность", "командный игрок", "стрессоустойчивость", "клиентоориентированность", "динамично развивающийся".
-    3. CONCISENESS & CLARITY: Keep the tone professional, straightforward, and human. Write the way a real, confident specialist speaks — dryly, politely, but without servility or watery formalities.
-    4. PERSONALIZATION ONLY: The recruiter must immediately see that this is a custom-written letter, not a template. Do not use any placeholders, draft brackets (like "[Имя]", "[Название компании]"), or generic phrases. If the company name is not mentioned in the vacancy description, refer to it as "Ваша команда" or "Ваш проект".
+### INPUT
 
-    ### STRUCTURAL REQUIREMENTS:
-    Write strictly 3 short, punchy paragraphs followed by the direct contact info:
+Candidate Resume:
+{resume_text}
 
-    - Paragraph 1: Direct opening. State clearly that you are interested in the part-time/project-based position of a Business Assistant / PM Assistant. Explicitly reference at least two specific tasks, requirements, or projects mentioned in the vacancy description to prove you have studied it thoroughly.
-    - Paragraph 2: Solution matching. Do not just list your skills. Explicitly map your real accomplishments (from the candidate's resume) directly to the company's pain points (from the vacancy description). If they need automation, mention how you wrote JS tools for tracking. If they need scaling/management, mention how you scaled operations from 1 to 30+ assets. If they need research, mention your OSINT background. Keep it factual and metrics-oriented.
-    - Paragraph 3: Schedule alignment & Call to action. State that your target workload is up to 30 hours per week (part-time). Propose a brief chat to discuss how your operations and automation background can free up the manager's time.
+Vacancy Title:
+{vacancy_title}
 
-    ### OUTPUT FORMAT:
-    Output ONLY the final text of the cover letter. Do not include any intro, outro, explanations, or quotes.
+Vacancy Description:
+{vacancy_desc}
 
-    [Your 3-paragraph letter here]
+Candidate Contact Information:
+{contact_info}
 
-    С уважением,
-    [Extract candidate's real name from the contact information block]
-    [Extract real Telegram and Email from the contact information block]
+### STRUCTURE
+
+Write exactly 3 short paragraphs.
+
+Each paragraph must have a distinct function. There is no fixed sentence limit: use as many short sentences as necessary, but remove anything that does not serve the paragraph's purpose.
+
+PARAGRAPH 1 — POSITION + INTEREST + WORK FORMAT
+
+State directly that the candidate is interested in the exact position.
+
+Use the vacancy title or a concise natural version of it.
+
+Mention at least ONE concrete detail from the vacancy: a specific task, responsibility, technology, project, product, or requirement.
+
+Also communicate that the candidate is looking for part-time, project-based, or flexible work, preferably up to 30 hours per week.
+
+Do this naturally. Do not present the work-format options as a bureaucratic list.
+
+PARAGRAPH 2 — RELEVANT EXPERIENCE
+
+Show why the candidate is relevant to this vacancy.
+
+Choose only the 1–2 strongest facts from the resume that directly match the vacancy.
+
+Explicitly connect the vacancy's needs with the candidate's real experience.
+
+Examples:
+
+* if the vacancy requires Kubernetes, mention actual Kubernetes experience;
+* if it requires automation, mention actual automation work;
+* if it requires Linux administration, mention actual Linux/NixOS/system administration;
+* if it requires monitoring, mention actual monitoring/observability work.
+
+Prefer concrete technologies, responsibilities, projects, or metrics when they directly strengthen the match.
+
+Do not list the resume.
+Do not mention unrelated experience simply because it is impressive.
+
+PARAGRAPH 3 — FINAL VALUE + NEXT STEP
+
+Briefly state the practical relevance of the candidate's background to the role and finish with a simple invitation to discuss the position.
+
+Examples of acceptable endings:
+
+* "Могу подробнее рассказать об этом на собеседовании."
+* "Готов обсудить задачи позиции и показать соответствующие проекты."
+* "Предлагаю коротко обсудить задачи позиции и мой опыт."
+
+Do not repeat paragraphs 1 or 2.
+
+### STYLE
+
+Write in Russian.
+
+The tone must be:
+
+* dry;
+* direct;
+* calm;
+* professional;
+* confident without arrogance;
+* natural and human.
+
+Write as a technically competent person speaking directly to another person.
+
+Prefer simple, ordinary Russian wording and short sentences.
+
+Do not try to sound impressive through adjectives or elaborate phrasing.
+
+Do not praise the company or vacancy unless a very specific statement from the vacancy makes it genuinely relevant.
+
+### AVOID CLICHÉS AND FORMAL LANGUAGE
+
+Do NOT use typical AI-generated, overly formal, or sales-like phrases such as:
+
+* "Надеюсь, это письмо застанет вас в хорошем расположении духа."
+* "Пишу вам, чтобы выразить свой искренний интерес к данной вакансии."
+* "Спешу предложить свою кандидатуру."
+* "В ответ на вашу замечательную вакансию."
+* "С большим интересом ознакомился с вашей вакансией."
+* "Ваша вакансия привлекла мое особое внимание."
+* "Меня очень заинтересовала возможность стать частью вашей компании."
+* "Буду рад стать частью вашей дружной команды."
+* "Буду рад внести свой вклад в развитие вашей компании."
+* "Готов применить свои знания и навыки на благо компании."
+* "Уверен, что мой опыт и профессиональные навыки позволят мне успешно справляться с поставленными задачами."
+* "Считаю себя идеальным кандидатом на данную позицию."
+* "Я обладаю всеми необходимыми компетенциями."
+* "Позвольте рассказать о моем опыте."
+* "Для меня будет честью присоединиться к вашей компании."
+* "Буду признателен за возможность обсудить сотрудничество."
+* "Надеюсь на положительный ответ."
+* "Заранее благодарю за рассмотрение моей кандидатуры."
+* "Спасибо за уделенное время и внимание к моей кандидатуре."
+* "С нетерпением жду возможности пообщаться с вами."
+* "Готов стать ценным активом для вашей компании."
+* "Уникальный набор компетенций."
+* "Богатый опыт."
+* "Обширный опыт."
+* "Высокий уровень экспертизы."
+* "Проактивный подход."
+* "Ориентирован на результат."
+* "Командный игрок."
+* "Стрессоустойчивый."
+* "Коммуникабельный."
+* "Клиентоориентированный."
+* "Динамично развивающаяся компания."
+* "Инновационная компания."
+* "Успешно развивающаяся компания."
+* "Синергия."
+* "Точки роста."
+* "Внести вклад в достижение целей компании."
+* "Реализовать свой потенциал."
+
+Do not replace these phrases with other clichés having the same meaning.
+
+A simple phrase such as "Заинтересовала позиция DevOps Engineer" is acceptable.
+A sentence such as "Пишу вам с искренним интересом выразить..." is not.
+
+### RELEVANCE
+
+Every candidate fact must be relevant to this specific vacancy.
+
+Ask silently:
+"Does this fact make the candidate more relevant for this particular position?"
+
+If not, omit it.
+
+One strong relevant fact is better than a list of weak or unrelated facts.
+
+Do not mention unrelated projects, technologies, tools, achievements, education details, hobbies, or work history.
+
+### FACTUALITY — ABSOLUTE RULE
+
+Use ONLY information explicitly present in the candidate resume or contact information.
+
+Never invent, infer, assume, exaggerate, or fill gaps.
+
+Never invent or assume:
+
+* citizenship;
+* country of residence;
+* work authorization;
+* location;
+* age;
+* salary;
+* employment history;
+* company names;
+* job titles;
+* seniority;
+* education;
+* technologies;
+* certifications;
+* responsibilities;
+* production experience;
+* commercial experience;
+* achievements;
+* metrics;
+* project scope.
+
+Do not turn an implication into a fact.
+
+For example:
+
+* If the resume describes Kubernetes in a homelab, do not call it production experience.
+* If the resume mentions a technology, do not claim commercial experience with it unless explicitly stated.
+* If the vacancy requires a skill absent from the resume, do not invent that skill.
+
+When there is no strong factual match for a requirement, omit that requirement rather than inventing a connection.
+
+### WORK FORMAT
+
+The candidate is looking for:
+
+* part-time work;
+* project-based work;
+* flexible schedules;
+* preferably up to 30 hours per week.
+
+This is an intentional job-search preference.
+
+Mention this naturally in paragraph 1.
+
+Do not imply that the candidate is available for full-time work.
+
+### FORMATTING
+
+Do not use:
+
+* "Здравствуйте";
+* "Добрый день";
+* "Уважаемые коллеги";
+* "С уважением";
+* "С наилучшими пожеланиями".
+
+Do not add a greeting or formal closing.
+
+Do not use placeholders such as:
+
+* "[Имя]";
+* "[Название компании]";
+* "[Компания]".
+
+Do not invent a company name. Use it only when explicitly present in the vacancy and when mentioning it sounds natural.
+
+### OUTPUT
+
+Output ONLY the final cover letter.
+
+Output:
+
+1. paragraph 1;
+2. paragraph 2;
+3. paragraph 3;
+4. the contact information exactly as provided.
+
+Do not output analysis, explanations, headings, comments, markdown, or quotation marks.
+
+Before finalizing, silently verify:
+
+* the correct vacancy title is used;
+* at least one concrete vacancy detail is mentioned;
+* the work-format preference is mentioned in paragraph 1;
+* only directly relevant candidate facts are included;
+* nothing has been invented;
+* there are exactly 3 paragraphs;
+* the letter sounds like a real person wrote it;
+* none of the forbidden clichés are present.
+
+Candidate Contact Information:
+[Extract candidate's real name from the contact information block]
+[Extract real Telegram and Email from the contact information block]
     """
     return call_llm(prompt, task="writer", validator=_writer_sane)
 
@@ -467,7 +687,7 @@ def process_profile(context, page, profile):
 
             print(f"[+] Accepted by LLM. Generating cover letter...")
             cover_letter = generate_cover_letter(
-                resume_text, desc, profile.get("contact_info", "")
+                resume_text, vac["title"], desc, profile.get("contact_info", "")
             )
 
             # The vacancy is saved to the database. Push notification is skipped for Pull-only workflow.
