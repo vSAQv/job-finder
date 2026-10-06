@@ -1,214 +1,557 @@
-# 🤖 HH Job Automation Bot
+# 🤖 HH Job Finder
 
-> **A highly reliable, automated, pull-only job matchmaking assistant designed for HeadHunter (HH.ru).**
->
-> It operates directly through Chromium (Playwright) and OpenRouter LLMs to scrape, filter, and prepare tailored cover letters.
+[🇬🇧 English](README.md) · [🇷🇺 Русский](README.ru.md)
+
+A pull-only job-matching assistant for [HH.ru](https://hh.ru/).
 
 <p align="left">
   <img src="https://img.shields.io/badge/Ban_Probability-0%25-green?style=for-the-badge&logo=shield" alt="0% Ban Probability">
 </p>
 
-To guarantee a **0% ban probability**, the bot operates in a strictly passive (**Read-Only**) mode. It does not perform automated applications, messaging, or profile mutations on HH.ru.
+HH Job Finder uses a real Chromium browser session through Playwright to search vacancies, profile-specific rules to narrow the search, OpenRouter LLMs to judge vacancies and generate tailored cover letters, SQLite to keep processing history, and Telegram as the control/review interface.
 
----
+The project is designed around a **0% ban probability**: it only reads data from HH.ru and never submits applications, sends employer messages, or mutates the HH.ru profile.
 
-## 📂 1. Directory Structure
+> **No Kubernetes required.** Docker is the portable deployment path. Kubernetes is supported as an optional homelab/GitOps deployment.
 
-The following file structure is expected in the project root:
+## How it works
 
-```directory
-hh-auto-apply/
-├── .env                  # Excluded from Git. Contains secret tokens and keys
-├── .gitignore            # Excludes config.yaml, applied.db, and .env from Git
-├── applied.db            # Local SQLite database (auto-generated)
-├── auth_setup.py         # One-time browser session authorization script
-├── config.yaml           # Excluded from Git. Search profiles configuration
-├── Dockerfile            # Multi-stage Playwright Docker builder
-├── main.py               # Main long-running service entrypoint
-├── requirements.txt      # Python dependencies list
-├── shell.nix             # (Optional, for NixOS users) Nix development environment
-└── resumes/              # Directory containing resume .txt files (auto-generated)
+```text
+HH.ru authenticated session
+            │
+            ▼
+      Resume-based search
+            │
+            ▼
+   Profile filters + query blocks
+            │
+            ▼
+  Vacancy cards / candidate pool
+            │
+            ▼
+ Vacancy details + employer rating
+            │
+            ▼
+   LLM judge: YES / NO
+       │             │
+     NO            YES
+       │             │
+       ▼             ▼
+  store as         LLM writer
+  processed             │
+                        ▼
+                  SQLite history
+                        │
+                        ▼
+                  Telegram review
 ```
 
----
+The scraper runs in a background thread. Telegram polling runs independently in the main thread, so the bot remains available while a scraping cycle is in progress.
 
-## 🚀 2. Host Bootstrapping & File Initialization
+A scraping cycle processes every enabled profile, then sleeps for 4 hours before starting the next cycle.
 
-Before launching the Docker container on your host, you must create the persistent database file manually to prevent the Docker daemon from mapping it as a directory.
+## Current features
 
-Run these commands in your host terminal from the project root:
+### Vacancy collection
 
-```bash
-# An empty database file is initialized
-touch applied.db
+- Searches HH.ru through a saved authenticated browser session.
+- Processes every enabled profile independently.
+- Builds HH.ru search URLs from the profile's `resume_id`, `global_filters`, and query blocks.
+- Supports multiple query blocks per profile; blocks are processed sequentially and share the global filters.
+- Paginates up to `pages_to_scrape` pages for every query block.
+- Orders search results by publication time.
+- Collects vacancy title, vacancy ID, URL, company name, applicant count, and a company/title fingerprint.
+- Opens unseen vacancies and reads the full vacancy description.
+- Reads the employer brand rating when HH.ru exposes it.
+- Uses bounded human-like delays and scrolling between browser interactions.
+- Sorts the collected candidate vacancies by applicant count before detailed evaluation.
 
-# Correct file permissions are granted to the database
-chmod 666 applied.db
+### Profile-specific filtering
+
+Each profile has its own:
+
+- HH.ru resume ID;
+- resume text file;
+- search filters and query blocks;
+- strict requirements;
+- contact information;
+- enabled/disabled state;
+- page limit.
+
+This lets the same service run different job-search strategies from different resumes, such as a project/operations profile and a DevOps/infrastructure profile.
+
+### LLM judge
+
+The judge receives the vacancy description and the selected profile's strict requirements and decides whether the vacancy satisfies all required criteria.
+
+The response is validated as a single `YES` / `NO` token. Russian `ДА` / `НЕТ` is also accepted by the normalizer.
+
+A malformed response or a request failure does not automatically stop the cycle: the next model in the fallback pool is tried instead.
+
+### LLM writer
+
+Accepted vacancies are passed to a separate writer task.
+
+The writer receives:
+
+1. the selected candidate resume;
+2. the exact vacancy title;
+3. the vacancy description;
+4. the profile's contact information.
+
+The current writer rules are intentionally narrow:
+
+- exactly 3 short paragraphs;
+- direct opening focused on the actual vacancy;
+- 1–2 strongest relevant facts from the resume rather than a resume dump;
+- practical, dry, human Russian;
+- no AI/corporate clichés or generic filler;
+- no invented personal or professional facts;
+- contact information appended from the profile data.
+
+The writer also has a lightweight Russian-sanity validator. If the generated output fails validation, the next model is attempted.
+
+### Model routing and fallback
+
+The repository contains a small curated free-model pool instead of dynamically probing a large list on every cycle.
+
+The current curated models are:
+
+```text
+qwen/qwen3.8-27b:free
+thinkingmachines/inkling-small:free
+thinkingmachines/inkling:free
+nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
----
+The same curated set is currently available to both `judge` and `writer` tasks. Task-specific validation is what enforces different behavior:
 
-## ⚙️ 3. Configuration Setup
+- judge → exact `YES` / `NO` style output;
+- writer → Russian cover-letter sanity checks.
 
-### `.env` File
-Create a `.env` file in the root directory and configure your tokens:
+A model that fails at runtime is temporarily demoted in memory for 30 minutes. This avoids repeatedly retrying a known-bad free endpoint while adding no extra probing traffic.
 
-```env
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
-TELEGRAM_CHAT_ID=your_telegram_chat_id_here
+### `OPENROUTER_MODEL`
 
-# The primary model used by OpenRouter (Gemma 4 is recommended for Russian reasoning)
-OPENROUTER_MODEL=google/gemma-4-31b-it:free
+`OPENROUTER_MODEL` is an optional runtime override and is intentionally **shared by both judge and writer**.
+
+When it is set, that model is attempted first for both tasks. If it fails inference or response validation, the normal curated pool is used as fallback.
+
+When the variable is absent, the application uses its built-in default:
+
+```text
+google/gemma-4-31b-it:free
 ```
 
-### `config.yaml` File
-The service features a self-healing bootstrap. If `config.yaml` is missing on start, the bot will automatically generate an empty skeleton. You can then configure your profiles directly via the Telegram Bot or write them manually matching this structure:
+The model name itself is configuration, not a secret. The Kubernetes manifest does not need to contain it.
 
-<details>
-<summary><b>📖 Click to expand config.yaml template</b></summary>
+### SQLite history and deduplication
+
+Processed vacancies are stored in SQLite using the following logical fields:
+
+```sql
+CREATE TABLE vacancies (
+    id TEXT PRIMARY KEY,
+    profile_name TEXT,
+    title TEXT,
+    link TEXT,
+    cover_letter TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_read INTEGER DEFAULT 0,
+    fingerprint TEXT UNIQUE
+)
+```
+
+Current behavior:
+
+- vacancy IDs are treated as processed permanently;
+- an identical company/title fingerprint suppresses duplicates for 30 days;
+- unread accepted results are available through Telegram for 3 days;
+- rejected vacancies are stored as processed but are not shown in unread review;
+- cover letters are stored with the vacancy record.
+
+### Current history limitation
+
+The SQLite schema currently uses the HH.ru vacancy ID as a **global** primary key. Therefore the same vacancy cannot yet be stored as an independent history entry for two different profiles.
+
+This is a known limitation and is listed under **Planned** below.
+
+## Telegram bot
+
+The bot is the main runtime control surface.
+
+| Action | Purpose |
+| :--- | :--- |
+| `🟢/🔴 Toggle Profiles` | Enable or disable individual profiles. |
+| `📂 View Unread (3 Days)` | Review accepted vacancies and generated cover letters from the last 3 days. Opening them marks them as read. |
+| `⚙️ Edit Strict Requirements` | Replace the strict requirements text of a selected profile. |
+| `📄 Upload Resume` | Upload a `.txt` resume into the mounted `resumes/` directory. |
+| `➕ Add Profile via YAML` | Add a new profile by sending one YAML mapping. |
+| `❌ Delete Profile` | Remove a profile from `config.yaml`. |
+| `🔙 Cancel` | Cancel a multi-step interaction. |
+
+### Add Profile via YAML
+
+The bot expects a **single profile mapping**, not the complete `profiles:` list.
+
+Valid shape:
+
+```yaml
+name: "devops"
+enabled: true
+resume_id: "your_hh_resume_id"
+resume_title: "DevOps Engineer / Infrastructure Engineer / Linux Administrator"
+resume_file: "resumes/devops.txt"
+contact_info: |
+  Name: Your Name
+  Email: you@example.com
+  Telegram: @username
+pages_to_scrape: 4
+
+global_filters:
+  work_format:
+    - REMOTE
+
+queries:
+  - employment_form:
+      - PART
+      - PROJECT
+
+  - work_schedule_by_days:
+      - FLEXIBLE
+      - TWO_ON_TWO_OFF
+    working_hours:
+      - HOURS_4
+      - HOURS_2
+      - HOURS_3
+
+strict_requirements: |
+  1. ...
+  2. ...
+```
+
+Do **not** send:
 
 ```yaml
 profiles:
-  - name: "project_manager_profile"
-    enabled: true
-    resume_id: "your_resume_hash_id" # Must be wrapped in quotes
-    
-    # WARNING: This MUST match the exact, case-sensitive title of your resume on the HH.ru desktop UI!
-    resume_title: "Менеджер проектов" 
-    
-    resume_file: "resumes/pm_resume.txt"
-    contact_info: "Name: ...\nPhone: ...\nEmail: ...\nTelegram: @..."
-    pages_to_scrape: 2
-    
-    # Global filters are applied to every query block consistently (uncomment needed values)
-    global_filters:
-      work_format: ["REMOTE"] # Options: REMOTE, IN_OFFICE, COMBINED
-      # experience: ["noExperience"] # Options: noExperience, between1And3, between3And6, moreThan6
-      # salary: 100000 # Minimum salary as integer (not recommended: hides unstated salary vacancies)
-      # currency: ["RUR"] # Options: RUR, USD, EUR, BYR
-      # search_period: 3 # Options: 1 (24 hours), 3 (3 days), 30 (month)
-      # label: ["not_from_agency"] # Hides vacancy agencies, shows direct employers only
-
-    # Queries are rotated sequentially and merged with global_filters (additive OR logic)
-    queries:
-      - employment_form: ["PART", "PROJECT"] # Options: PART, PROJECT, FULL
-      - work_schedule_by_days: ["FLEXIBLE", "TWO_ON_TWO_OFF"] # Options: FLEXIBLE, TWO_ON_TWO_OFF, THREE_ON_THREE_OFF
-        working_hours: ["HOURS_4"] # Options: HOURS_2, HOURS_3, HOURS_4, HOURS_5, HOURS_6
-        
-    strict_requirements: |
-      1. HOURS & SCHEDULE:
-         - PASS: Part-time, flexible hours, project-based work, or an explicit workload cap of 30 hours per week or less.
-         - FAIL: Strictly full-time (40+ hours per week, e.g., 9:00 to 18:00 in-office requirements).
-
-      2. ROLE FOCUS:
-         - PASS: Business Assistant, Project Assistant, Junior PM, Operations Assistant, Process Coordinator. The role must focus on business processes, research, coordination, or technical support.
-         - FAIL: Personal Assistant / Executive Secretary (handling personal tasks like buying groceries, ordering private flights, booking family tables, dry cleaning). Cold Sales / Cold Calling roles (monotonous phone sales).
-
-      3. NATURE OF TASKS:
-         - PASS: Requires analytical thinking, data structuring, research (OSINT), team coordination, automation of routines, or integration of AI tools.
-         - FAIL: Purely repetitive manual data entry (brainless copy-pasting) with zero opportunity for optimization or code automation.
-
-      4. OPTIMIZATION POTENTIAL:
-         - PASS: Any business vertical (E-commerce, Real Estate, Education, Startups, Manufacturing) where the management requires building structured operational systems, automating workflows, implementing AI/LLM tools, or writing scripts to cut down manual labor.
-         - FAIL: Rigid traditional businesses with strictly manual, unchangeable administrative routines that explicitly reject any technical optimization or workflow automation.
-
-      5. HOURLY RATE (SALARY):
-         - PASS: If the salary is specified, the hourly rate must be equivalent to 17.5 BYN (approx. $5.4 USD or 500 RUR) per hour or higher. For example, a workload of 30 hours per week must pay at least 2100 BYN (approx. $650 USD or 60,000 RUR) per month. A workload of 20 hours per week must pay at least 1400 BYN (approx. $430 USD or 40,000 RUR) per month. If the salary is NOT specified, you MUST accept (PASS) the vacancy.
-         - FAIL: Only reject (FAIL) the vacancy if the salary is explicitly stated AND falls below the 17.5 BYN ($5.4 USD / 500 RUR) per hour threshold.
-
-      6. CONTRACT & EMPLOYMENT TYPE:
-         - PASS: Self-employed (самозанятость), short-term independent contractor agreements (подрядческий контракт / ГПХ) that can be easily terminated, or if the employment/contract type is NOT mentioned at all.
-         - FAIL: Strictly long-term corporate contracts (трудовой договор) requiring a commitment of more than 6 months.
-```
-</details>
-
----
-
-## 🔑 4. Browser Session Authorization (`state.json`)
-
-To navigate matching search pages, the bot requires an active authorized session on HH.ru. You must generate `state.json` once on your workstation.
-
-### For NixOS Hosts:
-Use the provided `shell.nix` to load Playwright dependencies natively:
-
-```bash
-# Enter the Nix development shell
-nix-shell
-
-# Run the authorization setup script
-python auth_setup.py
+  - name: "devops"
 ```
 
-### For non-NixOS Hosts:
-Ensure Playwright is installed locally:
+and do not send a top-level YAML list beginning with `- name:`. The Telegram handler parses the submitted message as one profile object and then appends it to `config.yaml`.
 
-```bash
-pip install playwright && playwright install chromium
-python auth_setup.py
-```
+## Profile configuration
 
-### Steps:
-1. A Chromium window will open. Log in manually to your HH.ru account and solve any captchas.
-2. Navigate to your resume list.
-3. Return to the terminal and press `<kbd>ENTER</kbd>`.
-4. The `state.json` file is generated in the root folder.
+`config.yaml` is runtime configuration. A missing file is bootstrapped as an empty `profiles` skeleton, but useful scraping requires at least one enabled profile.
 
----
-
-## 🐳 5. Integrating with an Existing Homelab Stack
-
-If your homelab services reside in a single monolithic `docker-compose.yml` file, do not run a separate docker-compose command. Integrate the `hh-bot` service directly into your existing configuration.
-
-### Deployment steps:
-1. Place the `hh-auto-apply` repository folder inside your homelab directory (e.g., `/home/user/homelab/hh-auto-apply`).
-2. Open your main homelab `/home/user/homelab/docker-compose.yml`.
-3. Append the service block below, ensuring the `build:` context and volume mappings point correctly to the relative path of the `./hh-auto-apply` subdirectory:
+Main fields:
 
 ```yaml
-services:
-  # ... Your existing homelab services (e.g., portainer, nextcloud, pihole) ...
+profiles:
+  - name: "example_profile"
+    enabled: true
 
-  hh-bot:
-    build: ./hh-auto-apply  # Relative path to the cloned repository folder
-    container_name: hh-bot
-    restart: unless-stopped
-    ipc: host  # Shares host shared memory to prevent Chromium out-of-memory crashes
-    env_file:
-      - ./hh-auto-apply/.env
-    networks:
-      - homelab_network  # Joins your existing homelab Docker network
-    volumes:
-      # Ensure write permissions are enabled by removing :ro flags from config and resumes
-      - ./hh-auto-apply/config.yaml:/app/config.yaml
-      - ./hh-auto-apply/resumes:/app/resumes
-      - ./hh-auto-apply/applied.db:/app/applied.db  # Database persistence volume mapping
-      - ./hh-auto-apply/state.json:/app/state.json:ro
+    resume_id: "your_hh_resume_id"
+    resume_title: "Resume title"
+    resume_file: "resumes/example.txt"
 
-networks:
-  homelab_network:
-    external: true
-    name: homelab_default  # Replace with the actual name of your homelab Docker network
+    contact_info: |
+      Name: Your Name
+      Email: you@example.com
+      Telegram: @username
+
+    pages_to_scrape: 4
+
+    global_filters:
+      work_format:
+        - REMOTE
+
+    queries:
+      - employment_form:
+          - PART
+          - PROJECT
+
+      - work_schedule_by_days:
+          - FLEXIBLE
+          - TWO_ON_TWO_OFF
+        working_hours:
+          - HOURS_4
+          - HOURS_2
+          - HOURS_3
+
+    strict_requirements: |
+      1. ...
+      2. ...
 ```
 
-4. Rebuild and launch your monolithic stack from your homelab root folder:
+`resume_id` is the HH.ru resume identifier used to build the private resume-based search URL. `resume_title` is profile metadata; the search itself uses `resume_id`.
+
+`global_filters` are applied to every query block. Query blocks are processed independently, allowing one profile to cover multiple HH.ru search modes without duplicating the common filters.
+
+## HH.ru browser authorization
+
+The scraper depends on an authenticated `state.json` created by Playwright.
+
+The session is not permanent. HH.ru can invalidate an old browser session, especially after long periods of inactivity. When that happens, refresh `state.json` by running `auth_setup.py` again and logging in manually.
+
+### NixOS / devenv
+
 ```bash
-sudo docker compose up -d --build
+devenv shell
+python auth_setup.py
 ```
 
----
+### Other systems
 
-## 💬 6. Telegram Bot Interface Usage
-
-Once deployed, open your Telegram Bot and send `/start` or `/menu` to initialize the graphical sticky keyboard menu.
-
-| Button / Action | Description |
-| :--- | :--- |
-| **🟢/🔴 Toggle Profiles** | Lists all profiles stored in `config.yaml` with their active status. Click on a profile name to toggle it on or off. |
-| **📂 View Unread (3 Days)** | Pulls all newly evaluated matching vacancies and their prepared cover letters generated in the last 3 days. Vacancies shown here are automatically marked as read in the database. |
-| **⚙️ Edit Strict Requirements** | Lists profiles. Selecting a profile displays the current strict requirements in a copyable code block, unifies the input prompt, and lets you overwrite the requirements by sending a new text message. |
-| **📄 Upload Resume** | Puts the bot in file-reception mode. Drop any `.txt` resume file into the chat, and the bot automatically saves it to the `resumes/` folder on your server. |
-| **➕ Add Profile via YAML** | Sends a formatted template snippet. Fill it out and send it back as a message. The bot validates the fields, checks if the referred resume exists, and appends the new profile block to `config.yaml`. |
-| **❌ Delete Profile** | Displays a list of active profiles. Clicking one permanently deletes it from `config.yaml`. |
-| **🔙 Cancel Button** | Present in all input prompts. Clicking it instantly terminates any active next-step input state, preventing the bot from hanging. |
+```bash
+pip install -r requirements.txt
+playwright install chromium
+python auth_setup.py
 ```
+
+The script opens Chromium, lets you authenticate manually, and saves the browser state.
+
+`state.json` is sensitive runtime state and must never be committed.
+
+### Why a fresh session matters
+
+Resume-based HH.ru searches can return an error page instead of the normal vacancy SERP when the saved session has expired. The scraper then cannot see vacancy cards and may appear to return zero results. Refreshing `state.json` restores the authenticated browser state.
+
+## Deployment
+
+The application is designed to work without Kubernetes.
+
+### 🐳 Standalone Docker
+
+Requirements:
+
+- Docker;
+- an HH.ru account;
+- an OpenRouter API key;
+- a Telegram bot token and chat ID;
+- a valid authenticated `state.json`.
+
+Clone the repository and prepare runtime files:
+
+```bash
+git clone <repository-url>
+cd job-finder
+
+mkdir -p resumes
+touch config.yaml applied.db
+```
+
+Create `.env`:
+
+```env
+OPENROUTER_API_KEY=your_openrouter_api_key
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+
+# Optional. Attempted first for both judge and writer.
+OPENROUTER_MODEL=google/gemma-4-31b-it:free
+```
+
+Generate or refresh the HH.ru session:
+
+```bash
+python auth_setup.py
+```
+
+Build and run:
+
+```bash
+docker build -t job-finder:latest .
+
+docker run -d \
+  --name job-finder \
+  --restart unless-stopped \
+  --env-file .env \
+  -v "$PWD/config.yaml:/app/config.yaml" \
+  -v "$PWD/resumes:/app/resumes" \
+  -v "$PWD/applied.db:/app/applied.db" \
+  -v "$PWD/state.json:/app/state.json:ro" \
+  job-finder:latest
+```
+
+Logs:
+
+```bash
+docker logs -f job-finder
+```
+
+The application does not expose an HTTP port.
+
+### Docker Compose
+
+The repository includes `docker-compose.yml`, but the checked-in compose file is configured around the author's homelab network. It should **not** be treated as the universal standalone configuration.
+
+For a normal Docker-only installation, use the `docker run` example above or adapt the compose file to your own network setup.
+
+The important persistent mounts are:
+
+```text
+./config.yaml:/app/config.yaml
+./resumes:/app/resumes
+./applied.db:/app/applied.db
+./state.json:/app/state.json:ro
+```
+
+### ☸️ Kubernetes (optional)
+
+Kubernetes is an optional deployment target used for the author's homelab/GitOps setup. The application itself does not depend on Kubernetes and has no HTTP server.
+
+The current deployment uses:
+
+```text
+Image: ghcr.io/vsaqv/job-finder:latest
+Replicas: 1
+imagePullPolicy: Always
+```
+
+The pod runs as UID `1000`, GID `100`, with a 1 GiB `/dev/shm` tmpfs for Chromium. Current resources are:
+
+```text
+requests: 200m CPU / 512Mi memory
+limits:   1 CPU  / 2Gi memory
+```
+
+Kubernetes injects these credentials from `homelab-secrets`:
+
+```text
+OPENROUTER_API_KEY
+TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID
+```
+
+`OPENROUTER_MODEL` is not required in the manifest. If it is absent from the pod environment, the application falls back to its built-in default.
+
+The deployment mounts persistent host-side runtime state:
+
+```text
+config.yaml
+applied.db
+state.json
+resumes/
+```
+
+`state.json` is read-only in the pod. `applied.db` must be writable by the container user; host-side ownership and permissions therefore matter for SQLite.
+
+The deployment intentionally has no Kubernetes `Service` and no HTTP readiness/liveness probe because the application does not listen on a network port.
+
+### Updating the Kubernetes image
+
+The GitHub Actions workflow publishes `ghcr.io/vsaqv/job-finder:latest` whenever `main` is pushed.
+
+Because the Deployment uses `imagePullPolicy: Always`, a running pod can be updated with:
+
+```bash
+kubectl rollout restart deployment/job-finder
+kubectl rollout status deployment/job-finder
+kubectl logs -f deployment/job-finder
+```
+
+An image-only push does not change the Deployment spec by itself, so an explicit rollout restart (or equivalent GitOps action) is required to make a running pod pull the new `latest` image.
+
+## Project files
+
+```text
+job-finder/
+├── .github/
+│   └── workflows/
+│       └── docker.yml       # Build and publish image to GHCR
+├── tests/
+│   └── test_model_router.py
+├── main.py                  # Scraper + Telegram bot
+├── model_router.py          # Model pools, validation, fallback/demotion
+├── auth_setup.py            # Manual HH.ru session setup
+├── Dockerfile
+├── docker-compose.yml       # Homelab-oriented Docker Compose example
+├── requirements.txt
+├── devenv.nix
+├── devenv.yaml
+├── .envrc
+└── LICENSE
+```
+
+Runtime-only files are normally kept outside the Git repository in production:
+
+```text
+config.yaml
+applied.db
+resumes/
+state.json
+.env
+```
+
+They are ignored by Git in the current project setup.
+
+## Development and tests
+
+The repository contains offline unit tests for model routing and response validation.
+
+With `devenv`:
+
+```bash
+devenv shell -- python -m unittest discover -s tests -v
+```
+
+Python compilation check:
+
+```bash
+python -m py_compile main.py model_router.py tests/test_model_router.py
+```
+
+Build the image locally:
+
+```bash
+docker build -t job-finder:local-test .
+```
+
+## CI / image publishing
+
+`.github/workflows/docker.yml` runs on pushes to `main` and builds/publishes:
+
+```text
+ghcr.io/vsaqv/job-finder:latest
+```
+
+The workflow uses GitHub's ephemeral `GITHUB_TOKEN` with package-write permission. Application credentials are not stored in the repository.
+
+## Operational and security notes
+
+- **0% ban probability** is the project's central operating principle: HH.ru is accessed in pull-only/read-only mode.
+- The bot never automatically applies, messages employers, or edits HH.ru profile data.
+- `state.json` contains authenticated browser state and must be treated as sensitive.
+- `.env` contains credentials and must not be committed.
+- Do not run two long-polling instances with the same Telegram bot token. Running a local copy and a Kubernetes copy simultaneously causes Telegram API `409 Conflict` errors.
+- The SQLite database is persistent runtime state. Back it up before deleting or recreating it.
+- In Kubernetes, the SQLite file must be writable by UID `1000` / GID `100`; an incorrectly owned hostPath file can produce `sqlite3.OperationalError: attempt to write a readonly database`.
+- A renewed `state.json` only affects newly created browser contexts. Restart the long-running container after replacing it if the current process already created its context.
+
+## Planned
+
+### Separate vacancy history per profile / resume
+
+The current SQLite model treats `id` as the global primary key. The planned schema will scope vacancy history and deduplication to the profile/resume, allowing the same HH.ru vacancy to appear independently in multiple profile histories.
+
+Example target behavior:
+
+```text
+PM profile    → vacancy 123 → stored / reviewed / marked read
+DevOps profile → vacancy 123 → separately stored / reviewed / marked read
+```
+
+### Model management through Telegram
+
+The planned Telegram interface will allow model configuration without editing source code or redeploying the application.
+
+The intended control surface includes changing:
+
+- the `OPENROUTER_MODEL` override;
+- task-specific fallback model selection/pools, where appropriate.
+
+The runtime validation and fallback mechanism will remain in place regardless of how model selection is edited.
+
+## License
+
+MIT
