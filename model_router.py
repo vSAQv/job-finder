@@ -39,6 +39,7 @@ from typing import Dict, List, Optional
 # as tail fallbacks and demoted on failure.
 POOLS: Dict[str, List[str]] = {
     "judge": [
+        "nvidia/nemotron-3.5-super-vl:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "inclusionai/ling-3.1-flash",
         "thinkingmachines/inkling-small:free",
@@ -50,6 +51,7 @@ POOLS: Dict[str, List[str]] = {
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
     ],
     "writer": [
+        "nvidia/nemotron-3.5-super-vl:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "inclusionai/ling-3.1-flash",
         "thinkingmachines/inkling-small:free",
