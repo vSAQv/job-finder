@@ -219,265 +219,156 @@ def evaluate_vacancy(vacancy_desc, requirements):
 def generate_cover_letter(resume_text, vacancy_title, vacancy_desc, contact_info):
     # A professional cover letter is drafted strictly in Russian from first-person singular perspective.
     prompt = f"""
-    You write short, natural Russian cover letters for real job applications on HH.ru.
+Write a concise, personalized cover letter for a real job application.
 
-Your goal is to write a concise letter specifically for the vacancy below. The letter must make clear:
-
-1. which position the candidate is applying for;
-2. that the vacancy was actually read;
-3. which parts of the candidate's real experience are relevant;
-4. that the candidate is looking for part-time, project-based, or flexible work, preferably up to 30 hours per week;
-5. that there is a reason to invite the candidate to a short conversation.
-
-Do not rewrite the resume. Select only the information that is useful for this particular vacancy.
-
-### INPUT
-
-Candidate Resume:
+CANDIDATE RESUME:
 {resume_text}
 
-Vacancy Title:
+VACANCY TITLE:
 {vacancy_title}
 
-Vacancy Description:
+VACANCY DESCRIPTION:
 {vacancy_desc}
 
-Candidate Contact Information:
+CANDIDATE CONTACT INFORMATION:
 {contact_info}
 
-### STRUCTURE
-
-Write exactly 3 short paragraphs.
-
-Each paragraph must have a distinct function. There is no fixed sentence limit: use as many short sentences as necessary, but remove anything that does not serve the paragraph's purpose.
-
-PARAGRAPH 1 — POSITION + INTEREST + WORK FORMAT
-
-State directly that the candidate is interested in the exact position.
-
-Use the vacancy title or a concise natural version of it.
-
-Mention at least ONE concrete detail from the vacancy: a specific task, responsibility, technology, project, product, or requirement.
-
-Also communicate that the candidate is looking for part-time, project-based, or flexible work, preferably up to 30 hours per week.
-
-Do this naturally. Do not present the work-format options as a bureaucratic list.
-
-PARAGRAPH 2 — RELEVANT EXPERIENCE
-
-Show why the candidate is relevant to this vacancy.
-
-Choose only the 1–2 strongest facts from the resume that directly match the vacancy.
-
-Explicitly connect the vacancy's needs with the candidate's real experience.
-
-Examples:
-
-* if the vacancy requires Kubernetes, mention actual Kubernetes experience;
-* if it requires automation, mention actual automation work;
-* if it requires Linux administration, mention actual Linux/NixOS/system administration;
-* if it requires monitoring, mention actual monitoring/observability work.
-
-Prefer concrete technologies, responsibilities, projects, or metrics when they directly strengthen the match.
-
-Do not list the resume.
-Do not mention unrelated experience simply because it is impressive.
-
-PARAGRAPH 3 — FINAL VALUE + NEXT STEP
-
-Briefly state the practical relevance of the candidate's background to the role and finish with a simple invitation to discuss the position.
-
-Examples of acceptable endings:
-
-* "Могу подробнее рассказать об этом на собеседовании."
-* "Готов обсудить задачи позиции и показать соответствующие проекты."
-* "Предлагаю коротко обсудить задачи позиции и мой опыт."
-
-Do not repeat paragraphs 1 or 2.
-
-### STYLE
-
-Write in Russian.
-
-The tone must be:
-
-* dry;
-* direct;
-* calm;
-* professional;
-* confident without arrogance;
-* natural and human.
-
-Write as a technically competent person speaking directly to another person.
-
-Prefer simple, ordinary Russian wording and short sentences.
-
-Do not try to sound impressive through adjectives or elaborate phrasing.
-
-Do not praise the company or vacancy unless a very specific statement from the vacancy makes it genuinely relevant.
-
-### AVOID CLICHÉS AND FORMAL LANGUAGE
-
-Do NOT use typical AI-generated, overly formal, or sales-like phrases such as:
-
-* "Надеюсь, это письмо застанет вас в хорошем расположении духа."
-* "Пишу вам, чтобы выразить свой искренний интерес к данной вакансии."
-* "Спешу предложить свою кандидатуру."
-* "В ответ на вашу замечательную вакансию."
-* "С большим интересом ознакомился с вашей вакансией."
-* "Ваша вакансия привлекла мое особое внимание."
-* "Меня очень заинтересовала возможность стать частью вашей компании."
-* "Буду рад стать частью вашей дружной команды."
-* "Буду рад внести свой вклад в развитие вашей компании."
-* "Готов применить свои знания и навыки на благо компании."
-* "Уверен, что мой опыт и профессиональные навыки позволят мне успешно справляться с поставленными задачами."
-* "Считаю себя идеальным кандидатом на данную позицию."
-* "Я обладаю всеми необходимыми компетенциями."
-* "Позвольте рассказать о моем опыте."
-* "Для меня будет честью присоединиться к вашей компании."
-* "Буду признателен за возможность обсудить сотрудничество."
-* "Надеюсь на положительный ответ."
-* "Заранее благодарю за рассмотрение моей кандидатуры."
-* "Спасибо за уделенное время и внимание к моей кандидатуре."
-* "С нетерпением жду возможности пообщаться с вами."
-* "Готов стать ценным активом для вашей компании."
-* "Уникальный набор компетенций."
-* "Богатый опыт."
-* "Обширный опыт."
-* "Высокий уровень экспертизы."
-* "Проактивный подход."
-* "Ориентирован на результат."
-* "Командный игрок."
-* "Стрессоустойчивый."
-* "Коммуникабельный."
-* "Клиентоориентированный."
-* "Динамично развивающаяся компания."
-* "Инновационная компания."
-* "Успешно развивающаяся компания."
-* "Синергия."
-* "Точки роста."
-* "Внести вклад в достижение целей компании."
-* "Реализовать свой потенциал."
-
-Do not replace these phrases with other clichés having the same meaning.
-
-A simple phrase such as "Заинтересовала позиция DevOps Engineer" is acceptable.
-A sentence such as "Пишу вам с искренним интересом выразить..." is not.
-
-### RELEVANCE
-
-Every candidate fact must be relevant to this specific vacancy.
-
-Ask silently:
-"Does this fact make the candidate more relevant for this particular position?"
-
-If not, omit it.
-
-One strong relevant fact is better than a list of weak or unrelated facts.
-
-Do not mention unrelated projects, technologies, tools, achievements, education details, hobbies, or work history.
-
-### FACTUALITY — ABSOLUTE RULE
-
-Use ONLY information explicitly present in the candidate resume or contact information.
-
-Never invent, infer, assume, exaggerate, or fill gaps.
-
-Never invent or assume:
-
-* citizenship;
-* country of residence;
-* work authorization;
-* location;
-* age;
-* salary;
-* employment history;
-* company names;
-* job titles;
-* seniority;
-* education;
-* technologies;
-* certifications;
-* responsibilities;
-* production experience;
-* commercial experience;
-* achievements;
-* metrics;
-* project scope.
-
-Do not turn an implication into a fact.
-
-For example:
-
-* If the resume describes Kubernetes in a homelab, do not call it production experience.
-* If the resume mentions a technology, do not claim commercial experience with it unless explicitly stated.
-* If the vacancy requires a skill absent from the resume, do not invent that skill.
-
-When there is no strong factual match for a requirement, omit that requirement rather than inventing a connection.
-
-### WORK FORMAT
-
-The candidate is looking for:
-
-* part-time work;
-* project-based work;
-* flexible schedules;
-* preferably up to 30 hours per week.
-
-This is an intentional job-search preference.
-
-Mention this naturally in paragraph 1.
-
-Do not imply that the candidate is available for full-time work.
-
-### FORMATTING
-
-Do not use:
-
-* "Здравствуйте";
-* "Добрый день";
-* "Уважаемые коллеги";
-* "С уважением";
-* "С наилучшими пожеланиями".
-
-Do not add a greeting or formal closing.
-
-Do not use placeholders such as:
-
-* "[Имя]";
-* "[Название компании]";
-* "[Компания]".
-
-Do not invent a company name. Use it only when explicitly present in the vacancy and when mentioning it sounds natural.
-
-### OUTPUT
-
-Output ONLY the final cover letter.
-
-Output:
-
-1. paragraph 1;
-2. paragraph 2;
-3. paragraph 3;
-4. the contact information exactly as provided.
-
-Do not output analysis, explanations, headings, comments, markdown, or quotation marks.
-
-Before finalizing, silently verify:
-
-* the correct vacancy title is used;
-* at least one concrete vacancy detail is mentioned;
-* the work-format preference is mentioned in paragraph 1;
-* only directly relevant candidate facts are included;
-* nothing has been invented;
-* there are exactly 3 paragraphs;
-* the letter sounds like a real person wrote it;
-* none of the forbidden clichés are present.
-
-Candidate Contact Information:
-[Extract candidate's real name from the contact information block]
-[Extract real Telegram and Email from the contact information block]
-    """
+PRIORITY RULES
+
+1. Follow explicit application instructions in the vacancy. Examples:
+   - a secret word that must appear at the beginning;
+   - answers to specific questions;
+   - required salary expectations or language skills;
+   - a required language or response format.
+
+2. These instructions do not remove the basic structure:
+   - identify the position at the beginning;
+   - describe relevant candidate experience;
+   - put contact information at the very end.
+   The only exception to starting with the position is a required secret
+   word or phrase, which must come first. Identify the position immediately
+   after it.
+
+3. Never invent candidate information, skills, experience, responsibilities,
+   achievements, metrics, salary expectations, or project results.
+
+LANGUAGE
+
+Use English only when BOTH conditions are true:
+- The main text of the vacancy description is written in English.
+- The vacancy requires good English: for example, B1/Intermediate or higher,
+  fluent or professional English, regular communication in English, or
+  English as a working language.
+
+If either condition is false, write in Russian, unless the vacancy explicitly
+requests another language for the application.
+
+Do not choose English just because the job title or some technical terms
+are in English.
+
+DEFAULT STRUCTURE
+
+Write two short body paragraphs, followed by the contact block.
+
+Paragraph 1 — POSITION
+- State directly which position the candidate is applying for.
+- Use VACANCY TITLE when it is available and clear.
+- Mention one specific task, technology, product, or responsibility from
+  the vacancy when relevant.
+- Do not add a greeting, personal introduction, or generic opening.
+
+Paragraph 2 — RELEVANT EXPERIENCE
+- Select only the 1–3 strongest facts that match the vacancy.
+- Explain the connection between the candidate's actual experience and
+  the job requirements.
+- Prefer concrete projects, technologies, responsibilities, or results.
+- Keep the paragraph focused. Do not summarize the entire resume.
+- Do not add a generic invitation to an interview or a paragraph about
+  how much value the candidate could bring.
+
+When the vacancy asks additional questions or specific information, answer
+them directly and concisely in the body. Use a numbered list only when
+the requested format makes it appropriate. Keep the position identification
+first and the contact block last.
+
+FACTUAL ACCURACY
+
+Use only facts supported by the candidate's resume or contact information.
+
+- Never present personal projects or homelab experience as commercial
+  or production experience.
+- Never claim commercial experience with a technology just because it
+  appears in the resume.
+- Mention metrics only when they are explicitly supported and relevant.
+- Do not list unrelated experience or technologies.
+- Do not invent connections between the candidate's skills and the vacancy.
+- Do not routinely list missing skills. Mention a limitation only when
+  the employer asks directly or when omitting it would be misleading.
+- Never invent a company name, salary expectation, language level,
+  employment arrangement, or availability.
+
+Do not mention a preference for part-time work, a flexible schedule,
+remote work, or any other employment format unless it is explicitly
+supported by the candidate's current information and relevant to this
+application. Do not assume that the candidate rejects full-time work.
+
+STYLE — STRICT RULES
+
+Write naturally, directly, and concisely.
+Use simple wording and a calm, matter-of-fact tone.
+
+ABSOLUTELY FORBIDDEN:
+- Emojis and emoticons.
+- Exclamation marks anywhere in the letter.
+- Greetings and formal sign-offs.
+- Generic openings, filler, corporate jargon, and AI-style clichés.
+- Empty statements about being motivated, proactive, stress-resistant,
+  results-oriented, or an ideal candidate.
+- Generic requests to discuss the opportunity or invitations to an interview.
+- Repetition of the vacancy description or the candidate's resume.
+- Markdown headings, decorative formatting, or unnecessary bullets.
+
+Do not replace banned clichés with synonyms that serve the same purpose.
+Start with the position, not with a conversational phrase such as
+"Давайте знакомиться" or "Мне нравится эта возможность".
+
+LENGTH
+
+Normally aim for 50–90 words in the letter body, excluding contacts.
+Do not exceed 110 words unless the vacancy explicitly requires answers
+or additional information that makes a longer response necessary.
+Every sentence must provide concrete, relevant information.
+
+CONTACT BLOCK
+
+Always finish with the candidate's actual contact details:
+- Full name
+- Telegram
+- Email
+
+For technical, IT, engineering, or other relevant portfolio-based positions,
+also include GitHub if a real URL is present in the supplied contact information.
+
+Use the actual supplied values. Do not invent missing details or print
+placeholders. Keep the contacts at the very end, after all answers and
+other vacancy-specific information.
+
+FINAL CHECK
+
+Before responding, silently verify:
+- The correct position is identified at the beginning, except for a required
+  opening keyword.
+- The language follows the rules above.
+- The letter is personalized to this vacancy.
+- Every candidate fact is supported by the input.
+- No irrelevant experience or unsupported claims are included.
+- There are no emojis, emoticons, or exclamation marks.
+- The letter is concise and has no generic opening or closing.
+- All explicit application instructions are satisfied.
+- Contact information is at the very end.
+
+Output ONLY the finished cover letter. No analysis or explanations.
+     """
     return call_llm(prompt, task="writer", validator=_writer_sane)
 
 
